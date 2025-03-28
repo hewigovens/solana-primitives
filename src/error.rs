@@ -1,41 +1,31 @@
-use std::fmt;
+use thiserror::Error;
 
 /// A custom error type for Solana operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SolanaError {
-    /// Invalid public key
+    #[error("Invalid public key")]
     InvalidPubkey,
-    /// Invalid signature
+    #[error("Invalid public key length")]
+    InvalidPubkeyLength,
+    #[error("Invalid signature")]
     InvalidSignature,
-    /// Invalid signature index
+    #[error("Invalid signature length")]
+    InvalidSignatureLength,
+    #[error("Invalid signature index")]
     InvalidSignatureIndex,
-    /// Invalid instruction data
+    #[error("Invalid instruction data")]
     InvalidInstructionData,
-    /// Invalid message
+    #[error("Invalid message")]
     InvalidMessage,
-    /// Invalid transaction
+    #[error("Invalid transaction")]
     InvalidTransaction,
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
     /// RPC error
     #[cfg(feature = "jsonrpc")]
+    #[error("RPC error: {0}")]
     RpcError(String),
 }
-
-impl fmt::Display for SolanaError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SolanaError::InvalidPubkey => write!(f, "Invalid public key"),
-            SolanaError::InvalidSignature => write!(f, "Invalid signature"),
-            SolanaError::InvalidSignatureIndex => write!(f, "Invalid signature index"),
-            SolanaError::InvalidInstructionData => write!(f, "Invalid instruction data"),
-            SolanaError::InvalidMessage => write!(f, "Invalid message"),
-            SolanaError::InvalidTransaction => write!(f, "Invalid transaction"),
-            #[cfg(feature = "jsonrpc")]
-            SolanaError::RpcError(msg) => write!(f, "RPC error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for SolanaError {}
 
 /// A type alias for Result with SolanaError
 pub type Result<T> = std::result::Result<T, SolanaError>;
