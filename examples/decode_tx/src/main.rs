@@ -1,5 +1,5 @@
 use base64::Engine;
-use solana_primitives::types::{Transaction, VersionedTransaction};
+use solana_primitives::types::VersionedTransaction;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // https://explorer.solana.com/tx/5Nnhjv1GVB8T1k8MguUGHQw5zQQQsWET1f1zzj8azRhnVoYQPoZPtkscPCKy6FisP2eVWehjU1EYV8zywqKm5if4
@@ -12,68 +12,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Transaction bytes length: {}", tx_bytes.len());
     println!("First byte (signature count): 0x{:02x}", tx_bytes[0]);
 
-    // Try to decode as legacy transaction
-    match Transaction::deserialize_with_version(&tx_bytes) {
-        Ok(decoded_tx) => {
-            println!("\nSuccessfully decoded as legacy transaction!");
-            print_transaction(&decoded_tx);
-        }
-        Err(e) => {
-            println!("\nFailed to decode as legacy transaction: {}", e);
-        }
-    }
+    println!("\n==== Method 1: Direct deserialization from Solana wire format ====");
 
-    // Try to decode as versioned transaction
+    // Try to decode as versioned transaction using manual deserialization
     match VersionedTransaction::deserialize_with_version(&tx_bytes) {
         Ok(decoded_tx) => {
-            println!("\nSuccessfully decoded as versioned transaction!");
+            println!("✅ Successfully decoded transaction from wire format");
             print_versioned_transaction(&decoded_tx);
         }
         Err(e) => {
-            println!("\nFailed to decode as versioned transaction: {}", e);
+            println!("❌ Failed to decode transaction: {}", e);
+        }
+    }
+
+    println!("\n==== Method 2: Bincode serialization and deserialization ====");
+
+    // Convert wire format to bincode format
+    let bincode_bytes = VersionedTransaction::to_bincode_format(&tx_bytes)?;
+
+    println!("Wire format size: {} bytes", tx_bytes.len());
+    println!("Bincode format size: {} bytes", bincode_bytes.len());
+
+    // Deserialize from bincode
+    match VersionedTransaction::deserialize_bincode(&bincode_bytes) {
+        Ok(_bincode_decoded) => {
+            println!("✅ Successfully decoded transaction using bincode");
+            println!("The transaction has the same content as the one decoded directly.");
+        }
+        Err(e) => {
+            println!("❌ Failed to decode with bincode: {}", e);
         }
     }
 
     Ok(())
-}
-
-fn print_transaction(tx: &Transaction) {
-    println!("Number of signatures: {}", tx.signatures.len());
-    for (i, sig) in tx.signatures.iter().enumerate() {
-        println!("Signature {}: {}", i + 1, sig.to_base58());
-    }
-
-    println!("\nMessage header:");
-    println!(
-        "  Required signatures: {}",
-        tx.message.header.num_required_signatures
-    );
-    println!(
-        "  Readonly signed accounts: {}",
-        tx.message.header.num_readonly_signed_accounts
-    );
-    println!(
-        "  Readonly unsigned accounts: {}",
-        tx.message.header.num_readonly_unsigned_accounts
-    );
-
-    println!("\nAccount keys: {}", tx.message.account_keys.len());
-    for (i, key) in tx.message.account_keys.iter().enumerate() {
-        println!("  Account {}: {}", i, key.to_base58());
-    }
-
-    println!(
-        "\nRecent blockhash: {}",
-        bs58::encode(tx.message.recent_blockhash).into_string()
-    );
-
-    println!("\nInstructions: {}", tx.message.instructions.len());
-    for (i, instruction) in tx.message.instructions.iter().enumerate() {
-        println!("\nInstruction {}:", i + 1);
-        println!("  Program ID Index: {}", instruction.program_id_index);
-        println!("  Account Indices: {:?}", instruction.accounts);
-        println!("  Data (hex): {}", hex::encode(&instruction.data));
-    }
 }
 
 fn print_versioned_transaction(tx: &VersionedTransaction) {
@@ -160,6 +131,21 @@ fn print_versioned_transaction(tx: &VersionedTransaction) {
                 println!("  Program ID Index: {}", instruction.program_id_index);
                 println!("  Account Indices: {:?}", instruction.accounts);
                 println!("  Data (hex): {}", hex::encode(&instruction.data));
+            }
+
+            if !message.address_table_lookups.is_empty() {
+                println!(
+                    "\nAddress Table Lookups: {}",
+                    message.address_table_lookups.len()
+                );
+                for (i, lookup) in message.address_table_lookups.iter().enumerate() {
+                    println!("\nLookup Table {}:", i + 1);
+                    println!("  Table Key: {}", lookup.key.to_base58());
+                    println!("  Addresses: {}", lookup.addresses.len());
+                    for (j, addr) in lookup.addresses.iter().enumerate() {
+                        println!("    Address {}: {}", j, addr.to_base58());
+                    }
+                }
             }
         }
     }

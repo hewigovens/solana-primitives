@@ -1,7 +1,9 @@
 use crate::types::{
-    CompiledInstruction, LegacyMessage, Message, Pubkey, SignatureBytes, VersionedMessage,
-    VersionedMessageV0,
+    AddressLookupTableAccount, CompiledInstruction, LegacyMessage, Message, Pubkey, SignatureBytes,
+    VersionedMessage, VersionedMessageV0,
 };
+#[cfg(feature = "bincode-serialize")]
+use bincode;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +111,25 @@ impl Transaction {
                 })
             }
             _ => Err("Failed to decode legacy message for Transaction".into()),
+        }
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    /// Serialize the transaction to bytes using bincode
+    ///
+    /// This method is only available when the `bincode-serialize` feature is enabled.
+    pub fn serialize_bincode(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap_or_default()
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    /// Deserialize a transaction from bytes using bincode directly
+    ///
+    /// This method is only available when the `bincode-serialize` feature is enabled.
+    pub fn deserialize_bincode(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        match bincode::deserialize(bytes) {
+            Ok(tx) => Ok(tx),
+            Err(e) => Err(format!("Failed to deserialize transaction: {}", e).into()),
         }
     }
 }
@@ -239,6 +260,39 @@ impl VersionedTransaction {
 
         // Manually decode the message
         self::manual_decode::decode_message(message_bytes, signatures)
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    /// Serialize the versioned transaction to bytes using bincode
+    ///
+    /// This method is only available when the `bincode-serialize` feature is enabled.
+    pub fn serialize_bincode(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap_or_default()
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    /// Deserialize a versioned transaction from bytes using bincode directly.
+    /// Note: This expects data serialized with bincode, not Solana's wire format.
+    /// Use deserialize_with_version for Solana's wire format.
+    ///
+    /// This method is only available when the `bincode-serialize` feature is enabled.
+    pub fn deserialize_bincode(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        match bincode::deserialize(bytes) {
+            Ok(tx) => Ok(tx),
+            Err(e) => Err(format!("Failed to deserialize transaction: {}", e).into()),
+        }
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    /// Convert a transaction in Solana's wire format to bincode format for more efficient processing
+    ///
+    /// This method is only available when the `bincode-serialize` feature is enabled.
+    pub fn to_bincode_format(wire_format: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        // First decode using the manual decoder that handles Solana's wire format
+        let transaction = Self::deserialize_with_version(wire_format)?;
+
+        // Then re-encode with bincode for more efficient processing
+        Ok(transaction.serialize_bincode())
     }
 }
 
@@ -407,33 +461,161 @@ mod manual_decode {
     }
 
     /// Decode a V0 versioned message
-    /// Currently this is similar to legacy but with a version byte at the start
-    /// V0 also supports address lookup tables, but we're not handling that for simplicity
+    /// V0 messages support address lookup tables
     pub fn decode_v0_message(
         bytes: &[u8],
         signatures: Vec<SignatureBytes>,
     ) -> Result<VersionedTransaction, Box<dyn std::error::Error>> {
-        // V0 message format is almost identical to legacy except for potential address lookup tables
-        // For simplicity, we'll reuse the legacy message decoding logic and then convert
-
-        // First, decode as if it were a legacy message
-        let legacy_result = decode_legacy_message(bytes, Vec::new())?;
-
-        // Extract the message
-        if let VersionedTransaction::Legacy { message, .. } = legacy_result {
-            // Convert to V0 format
-            Ok(VersionedTransaction::V0 {
-                signatures,
-                message: VersionedMessageV0 {
-                    header: message.header,
-                    account_keys: message.account_keys,
-                    recent_blockhash: message.recent_blockhash,
-                    instructions: message.instructions,
-                },
-            })
-        } else {
-            Err("Unexpected error in message conversion".into())
+        if bytes.len() < 3 {
+            return Err("V0 message too short".into());
         }
+
+        // Header: 3 bytes
+        let header = MessageHeader {
+            num_required_signatures: bytes[0],
+            num_readonly_signed_accounts: bytes[1],
+            num_readonly_unsigned_accounts: bytes[2],
+        };
+
+        let mut offset = 3;
+
+        // Account keys
+        if offset >= bytes.len() {
+            return Err("Message too short: no account count".into());
+        }
+        let account_count = bytes[offset] as usize;
+        offset += 1;
+
+        if offset + (account_count * 32) > bytes.len() {
+            return Err("Message too short: not enough bytes for accounts".into());
+        }
+
+        let mut account_keys = Vec::with_capacity(account_count);
+        for _ in 0..account_count {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes[offset..offset + 32]);
+            account_keys.push(Pubkey::new(key));
+            offset += 32;
+        }
+
+        // Recent blockhash (always 32 bytes)
+        if offset + 32 > bytes.len() {
+            return Err("Message too short: no recent blockhash".into());
+        }
+        let mut recent_blockhash = [0u8; 32];
+        recent_blockhash.copy_from_slice(&bytes[offset..offset + 32]);
+        offset += 32;
+
+        // Instructions
+        if offset >= bytes.len() {
+            return Err("Message too short: no instruction count".into());
+        }
+        let instruction_count = bytes[offset] as usize;
+        offset += 1;
+
+        let mut instructions = Vec::with_capacity(instruction_count);
+        for _ in 0..instruction_count {
+            if offset >= bytes.len() {
+                return Err("Message too short: incomplete instruction".into());
+            }
+
+            // Program ID index (1 byte)
+            let program_id_index = bytes[offset];
+            offset += 1;
+
+            if offset >= bytes.len() {
+                return Err("Message too short: no account indices count".into());
+            }
+
+            // Account indices (1 byte count, then count bytes)
+            let account_indices_count = bytes[offset] as usize;
+            offset += 1;
+
+            if offset + account_indices_count > bytes.len() {
+                return Err("Message too short: not enough account indices".into());
+            }
+
+            let accounts = bytes[offset..offset + account_indices_count].to_vec();
+            offset += account_indices_count;
+
+            if offset >= bytes.len() {
+                return Err("Message too short: no instruction data length".into());
+            }
+
+            // Instruction data (1 byte length, then length bytes)
+            let data_length = bytes[offset] as usize;
+            offset += 1;
+
+            if offset + data_length > bytes.len() {
+                return Err("Message too short: not enough instruction data".into());
+            }
+
+            let data = bytes[offset..offset + data_length].to_vec();
+            offset += data_length;
+
+            instructions.push(CompiledInstruction {
+                program_id_index,
+                accounts,
+                data,
+            });
+        }
+
+        // Address table lookups (new in V0)
+        let mut address_table_lookups = Vec::new();
+
+        // Check if we have more data (for address table lookups)
+        if offset < bytes.len() {
+            let lookup_table_count = bytes[offset] as usize;
+            offset += 1;
+
+            for _ in 0..lookup_table_count {
+                if offset + 32 > bytes.len() {
+                    return Err("Message too short: incomplete address lookup table".into());
+                }
+
+                // Lookup table account key
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes[offset..offset + 32]);
+                let lookup_table_key = Pubkey::new(key);
+                offset += 32;
+
+                // Addresses in the lookup table
+                if offset >= bytes.len() {
+                    return Err("Message too short: no address count".into());
+                }
+
+                let address_count = bytes[offset] as usize;
+                offset += 1;
+
+                if offset + (address_count * 32) > bytes.len() {
+                    return Err("Message too short: not enough addresses in lookup table".into());
+                }
+
+                let mut addresses = Vec::with_capacity(address_count);
+                for _ in 0..address_count {
+                    let mut addr = [0u8; 32];
+                    addr.copy_from_slice(&bytes[offset..offset + 32]);
+                    addresses.push(Pubkey::new(addr));
+                    offset += 32;
+                }
+
+                address_table_lookups.push(AddressLookupTableAccount {
+                    key: lookup_table_key,
+                    addresses,
+                });
+            }
+        }
+
+        Ok(VersionedTransaction::V0 {
+            signatures,
+            message: VersionedMessageV0 {
+                header,
+                account_keys,
+                recent_blockhash,
+                instructions,
+                address_table_lookups,
+            },
+        })
     }
 }
 
@@ -494,6 +676,7 @@ mod tests {
                 accounts: vec![0],
                 data: vec![],
             }],
+            address_table_lookups: Vec::new(),
         });
         let mut transaction = VersionedTransaction::new(message);
 
@@ -516,6 +699,81 @@ mod tests {
                 assert_eq!(signatures.len(), 1);
             }
             _ => panic!("Expected V0 transaction"),
+        }
+    }
+
+    #[cfg(feature = "bincode-serialize")]
+    #[test]
+    fn test_bincode_serialization() {
+        // Create a test transaction
+        let message = VersionedMessage::V0(VersionedMessageV0 {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])],
+            recent_blockhash: [0u8; 32],
+            instructions: vec![CompiledInstruction {
+                program_id_index: 1,
+                accounts: vec![0],
+                data: vec![1, 2, 3],
+            }],
+            address_table_lookups: Vec::new(),
+        });
+        let mut transaction = VersionedTransaction::new(message);
+
+        // Add a signature
+        let signature = SignatureBytes::new([1; 64]);
+        transaction.add_signature(signature);
+
+        // Serialize using bincode
+        let bincode_serialized = transaction.serialize_bincode();
+
+        // Deserialize using bincode
+        let bincode_deserialized = VersionedTransaction::deserialize_bincode(&bincode_serialized)
+            .expect("Failed to deserialize with bincode");
+
+        // Verify they match
+        match (&transaction, &bincode_deserialized) {
+            (
+                VersionedTransaction::V0 {
+                    signatures: orig_sigs,
+                    message: orig_msg,
+                },
+                VersionedTransaction::V0 {
+                    signatures: new_sigs,
+                    message: new_msg,
+                },
+            ) => {
+                assert_eq!(orig_sigs.len(), new_sigs.len());
+                assert_eq!(orig_sigs[0], new_sigs[0]);
+                assert_eq!(
+                    orig_msg.header.num_required_signatures,
+                    new_msg.header.num_required_signatures
+                );
+                assert_eq!(
+                    orig_msg.header.num_readonly_signed_accounts,
+                    new_msg.header.num_readonly_signed_accounts
+                );
+                assert_eq!(
+                    orig_msg.header.num_readonly_unsigned_accounts,
+                    new_msg.header.num_readonly_unsigned_accounts
+                );
+                assert_eq!(orig_msg.account_keys.len(), new_msg.account_keys.len());
+                assert_eq!(orig_msg.recent_blockhash, new_msg.recent_blockhash);
+                assert_eq!(orig_msg.instructions.len(), new_msg.instructions.len());
+                assert_eq!(
+                    orig_msg.instructions[0].program_id_index,
+                    new_msg.instructions[0].program_id_index
+                );
+                assert_eq!(
+                    orig_msg.instructions[0].accounts,
+                    new_msg.instructions[0].accounts
+                );
+                assert_eq!(orig_msg.instructions[0].data, new_msg.instructions[0].data);
+            }
+            _ => panic!("Expected V0 transactions"),
         }
     }
 }

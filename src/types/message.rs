@@ -1,4 +1,4 @@
-use crate::types::{CompiledInstruction, Pubkey};
+use crate::types::{AddressLookupTableAccount, CompiledInstruction, Pubkey};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,8 @@ pub struct VersionedMessageV0 {
     pub recent_blockhash: [u8; 32],
     /// Instructions that will be executed in sequence and committed in one atomic transaction if all succeed.
     pub instructions: Vec<CompiledInstruction>,
+    /// List of address lookup tables
+    pub address_table_lookups: Vec<AddressLookupTableAccount>,
 }
 
 /// Versioned message format
