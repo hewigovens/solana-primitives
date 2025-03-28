@@ -1,31 +1,8 @@
+use super::{
+    request::{RequestId, RpcRequest},
+    response::*,
+};
 use crate::{Pubkey, Result, SolanaError};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RpcRequest {
-    jsonrpc: String,
-    id: u64,
-    method: String,
-    params: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct RpcResponse<T> {
-    jsonrpc: String,
-    id: u64,
-    result: T,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BlockhashResponse {
-    value: BlockhashValue,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BlockhashValue {
-    blockhash: String,
-    last_valid_block_height: u64,
-}
 
 /// A client for interacting with a Solana RPC node
 #[derive(Debug, Clone)]
@@ -47,7 +24,7 @@ impl RpcClient {
     pub async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64)> {
         let request = RpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: RequestId::Number(1),
             method: "getLatestBlockhash".to_string(),
             params: vec![serde_json::json!({
                 "commitment": "confirmed"
@@ -85,7 +62,7 @@ impl RpcClient {
     pub async fn submit_transaction(&self, transaction: &[u8]) -> Result<String> {
         let request = RpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: RequestId::Number(1),
             method: "sendTransaction".to_string(),
             params: vec![
                 bs58::encode(transaction).into_string().into(),
@@ -114,7 +91,7 @@ impl RpcClient {
     pub async fn get_account_info(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>> {
         let request = RpcRequest {
             jsonrpc: "2.0".to_string(),
-            id: 1,
+            id: RequestId::Number(1),
             method: "getAccountInfo".to_string(),
             params: vec![
                 pubkey.to_base58().into(),
@@ -123,20 +100,6 @@ impl RpcClient {
                 }),
             ],
         };
-
-        #[derive(Debug, Serialize, Deserialize)]
-        struct AccountInfo {
-            data: Vec<String>,
-            executable: bool,
-            lamports: u64,
-            owner: String,
-            rent_epoch: u64,
-        }
-
-        #[derive(Debug, Serialize, Deserialize)]
-        struct AccountResponse {
-            value: Option<AccountInfo>,
-        }
 
         let response: RpcResponse<AccountResponse> = self
             .client
