@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match VersionedTransaction::deserialize_bincode(&bincode_bytes) {
         Ok(_bincode_decoded) => {
             println!("✅ Successfully decoded transaction using bincode");
-            println!("The transaction has the same content as the one decoded directly.");
+            print_versioned_transaction(&_bincode_decoded);
         }
         Err(e) => {
             println!("❌ Failed to decode with bincode: {}", e);
