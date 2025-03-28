@@ -1,5 +1,5 @@
 use crate::types::{
-    AddressLookupTableAccount, CompiledInstruction, LegacyMessage, Message, Pubkey, SignatureBytes,
+    CompiledInstruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey, SignatureBytes,
     VersionedMessage, VersionedMessageV0,
 };
 #[cfg(feature = "bincode-serialize")]
@@ -579,29 +579,38 @@ mod manual_decode {
                 let lookup_table_key = Pubkey::new(key);
                 offset += 32;
 
-                // Addresses in the lookup table
+                // Writable indexes
                 if offset >= bytes.len() {
-                    return Err("Message too short: no address count".into());
+                    return Err("Message too short: no writable indexes count".into());
                 }
-
-                let address_count = bytes[offset] as usize;
+                let writable_indexes_count = bytes[offset] as usize;
                 offset += 1;
 
-                if offset + (address_count * 32) > bytes.len() {
-                    return Err("Message too short: not enough addresses in lookup table".into());
+                if offset + writable_indexes_count > bytes.len() {
+                    return Err("Message too short: not enough writable indexes".into());
                 }
 
-                let mut addresses = Vec::with_capacity(address_count);
-                for _ in 0..address_count {
-                    let mut addr = [0u8; 32];
-                    addr.copy_from_slice(&bytes[offset..offset + 32]);
-                    addresses.push(Pubkey::new(addr));
-                    offset += 32;
+                let writable_indexes = bytes[offset..offset + writable_indexes_count].to_vec();
+                offset += writable_indexes_count;
+
+                // Readonly indexes
+                if offset >= bytes.len() {
+                    return Err("Message too short: no readonly indexes count".into());
+                }
+                let readonly_indexes_count = bytes[offset] as usize;
+                offset += 1;
+
+                if offset + readonly_indexes_count > bytes.len() {
+                    return Err("Message too short: not enough readonly indexes".into());
                 }
 
-                address_table_lookups.push(AddressLookupTableAccount {
-                    key: lookup_table_key,
-                    addresses,
+                let readonly_indexes = bytes[offset..offset + readonly_indexes_count].to_vec();
+                offset += readonly_indexes_count;
+
+                address_table_lookups.push(MessageAddressTableLookup {
+                    account_key: lookup_table_key,
+                    writable_indexes,
+                    readonly_indexes,
                 });
             }
         }

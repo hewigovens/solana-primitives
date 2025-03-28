@@ -140,11 +140,9 @@ fn print_versioned_transaction(tx: &VersionedTransaction) {
                 );
                 for (i, lookup) in message.address_table_lookups.iter().enumerate() {
                     println!("\nLookup Table {}:", i + 1);
-                    println!("  Table Key: {}", lookup.key.to_base58());
-                    println!("  Addresses: {}", lookup.addresses.len());
-                    for (j, addr) in lookup.addresses.iter().enumerate() {
-                        println!("    Address {}: {}", j, addr.to_base58());
-                    }
+                    println!("  Table Key: {}", lookup.account_key.to_base58());
+                    println!("  Writable Indexes: {:?}", lookup.writable_indexes);
+                    println!("  Readonly Indexes: {:?}", lookup.readonly_indexes);
                 }
             }
         }
