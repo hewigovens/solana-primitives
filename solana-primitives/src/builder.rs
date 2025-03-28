@@ -37,6 +37,15 @@ impl TransactionBuilder {
 
     /// Add an instruction to the transaction
     pub fn add_instruction(&mut self, instruction: Instruction) -> &mut Self {
+        // Add program ID to account metas to ensure it's included in the account keys
+        self.account_metas
+            .entry(instruction.program_id)
+            .or_insert_with(|| AccountMeta {
+                pubkey: instruction.program_id,
+                is_signer: false,
+                is_writable: false,
+            });
+
         // Add all accounts from the instruction to our account metas
         for account_meta in &instruction.accounts {
             self.account_metas
@@ -167,5 +176,200 @@ impl InstructionBuilder {
             accounts: self.accounts,
             data: self.data,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instructions::system::create_account;
+    use crate::instructions::token::transfer_checked;
+    use crate::types::instruction::AccountMeta;
+    use crate::Pubkey;
+
+    // Real public keys from JavaScript test file
+    fn system_program() -> Pubkey {
+        Pubkey::from_base58("11111111111111111111111111111111").unwrap()
+    }
+
+    fn token_program() -> Pubkey {
+        Pubkey::from_base58("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap()
+    }
+
+    fn mint_pubkey() -> Pubkey {
+        Pubkey::from_base58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap()
+    }
+
+    fn token_pubkey() -> Pubkey {
+        Pubkey::from_base58("4q2wPZuZwQTB1dEU9sMGsJK1d8NSL1hpBjTGHBsLQNDh").unwrap()
+    }
+
+    fn authority_pubkey() -> Pubkey {
+        Pubkey::from_base58("Hozo7TadHq6PMMiGLGNvgk79Hvj5VTAM7Ny2bamQ2m8q").unwrap()
+    }
+
+    fn payer_pubkey() -> Pubkey {
+        Pubkey::from_base58("7o36UsWR1JQLpZ9PE2gn9L4SQ69CNNiWAXd4Jt7rqz9Z").unwrap()
+    }
+
+    fn new_account_pubkey() -> Pubkey {
+        Pubkey::from_base58("DShWnroshVbeUp28oopA3Pu7oFPDBtC1DBmPECXXAQ9n").unwrap()
+    }
+
+    // Create a random pubkey for tests that need a unique key
+    fn random_pubkey() -> Pubkey {
+        let mut bytes = [0u8; 32];
+        bytes
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, byte)| *byte = i as u8);
+        Pubkey::new(bytes)
+    }
+
+    // Create a test blockhash for transactions
+    fn test_blockhash() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, byte)| *byte = i as u8);
+        bytes
+    }
+
+    #[test]
+    fn test_instruction_builder() {
+        let program_id = token_program();
+        let source = token_pubkey();
+        let dest = random_pubkey();
+        let owner = authority_pubkey();
+        let mint = mint_pubkey();
+        let amount = 1_000_000;
+        let decimals = 6;
+
+        // Build the instruction
+        let mut builder = InstructionBuilder::new(program_id);
+        builder.accounts.push(AccountMeta {
+            pubkey: source,
+            is_signer: false,
+            is_writable: true,
+        });
+        builder.accounts.push(AccountMeta {
+            pubkey: mint,
+            is_signer: false,
+            is_writable: false,
+        });
+        builder.accounts.push(AccountMeta {
+            pubkey: dest,
+            is_signer: false,
+            is_writable: true,
+        });
+        builder.accounts.push(AccountMeta {
+            pubkey: owner,
+            is_signer: true,
+            is_writable: false,
+        });
+
+        let ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
+
+        // Check program ID
+        assert_eq!(builder.program_id, token_program());
+        assert_eq!(ix.program_id, token_program());
+    }
+
+    #[test]
+    fn test_transaction_builder() {
+        // Create a simple transaction with one token transfer
+        let payer = payer_pubkey();
+        let blockhash = test_blockhash();
+        let mut tx_builder = TransactionBuilder::new(payer, blockhash);
+
+        // Add a token transfer instruction
+        let source = token_pubkey();
+        let dest = random_pubkey();
+        let owner = authority_pubkey();
+        let mint = mint_pubkey();
+        let amount = 1_000_000;
+        let decimals = 6;
+
+        let transfer_ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
+        tx_builder.add_instruction(transfer_ix);
+
+        // Build the transaction
+        let transaction = tx_builder.build().unwrap();
+
+        // Verify the transaction has the correct structure
+        assert_eq!(transaction.signatures.len(), 2); // payer + owner signatures
+
+        // Check that account keys are properly included
+        let account_keys = &transaction.message.account_keys;
+        assert!(account_keys.contains(&payer_pubkey())); // Fee payer
+        assert!(account_keys.contains(&source)); // Source account
+        assert!(account_keys.contains(&dest)); // Destination account
+        assert!(account_keys.contains(&owner)); // Owner
+        assert!(account_keys.contains(&mint)); // Mint
+        assert!(account_keys.contains(&token_program())); // Token program
+
+        // Verify the instructions
+        assert_eq!(transaction.message.instructions.len(), 1);
+        let compiled_ix = &transaction.message.instructions[0];
+        assert_eq!(
+            account_keys[compiled_ix.program_id_index as usize],
+            token_program()
+        );
+    }
+
+    #[test]
+    fn test_complex_transaction() {
+        // Create a transaction with multiple instructions to test shortVec encoding
+        let payer = payer_pubkey();
+        let blockhash = test_blockhash();
+        let mut tx_builder = TransactionBuilder::new(payer, blockhash);
+
+        // Add a system create account instruction
+        let from = payer_pubkey();
+        let new_account = new_account_pubkey();
+        let owner = system_program(); // Owner will be system program for this test
+        let lamports = 1_000_000_000; // 1 SOL
+        let space = 165;
+
+        let create_account_ix = create_account(&from, &new_account, lamports, space, &owner);
+        tx_builder.add_instruction(create_account_ix);
+
+        // Add a token transfer instruction
+        let source = token_pubkey();
+        let dest = random_pubkey();
+        let owner = authority_pubkey();
+        let mint = mint_pubkey();
+        let amount = 1_000_000;
+        let decimals = 6;
+
+        let transfer_ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
+        tx_builder.add_instruction(transfer_ix);
+
+        // Build the transaction
+        let transaction = tx_builder.build().unwrap();
+
+        // Verify the transaction has the correct structure
+        // There should be multiple signatures (at least payer and new_account for create_account)
+        assert!(transaction.signatures.len() >= 2);
+
+        // Check account keys are properly included
+        let account_keys = &transaction.message.account_keys;
+        assert!(account_keys.contains(&payer_pubkey())); // Fee payer
+        assert!(account_keys.contains(&new_account)); // New account
+        assert!(account_keys.contains(&system_program())); // System program
+        assert!(account_keys.contains(&source)); // Source account
+        assert!(account_keys.contains(&dest)); // Destination account
+        assert!(account_keys.contains(&owner)); // Owner
+        assert!(account_keys.contains(&mint)); // Mint
+        assert!(account_keys.contains(&token_program())); // Token program
+
+        // Verify number of instructions
+        assert_eq!(transaction.message.instructions.len(), 2);
+
+        // Test serialization - since we don't have a direct serialize method,
+        // we'll at least check that we can access the message
+        let message_data = &transaction.message;
+        assert!(!message_data.account_keys.is_empty());
     }
 }

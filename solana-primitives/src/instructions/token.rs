@@ -437,3 +437,301 @@ pub fn close_account(account: &Pubkey, destination: &Pubkey, owner: &Pubkey) -> 
         data: instruction.serialize(),
     }
 }
+
+/// Transfer tokens, asserting the token mint and decimals
+pub fn transfer_checked(
+    source: &Pubkey,
+    destination: &Pubkey,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    decimals: u8,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta {
+            pubkey: *source,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *mint,
+            is_signer: false,
+            is_writable: false,
+        },
+        AccountMeta {
+            pubkey: *destination,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *owner,
+            is_signer: true,
+            is_writable: false,
+        },
+    ];
+
+    let data = TokenInstruction::TransferChecked { amount, decimals }.serialize();
+
+    Instruction {
+        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        accounts,
+        data,
+    }
+}
+
+/// Mint new tokens to an account, asserting the token mint and decimals
+pub fn mint_to_checked(
+    mint: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    decimals: u8,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta {
+            pubkey: *mint,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *destination,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *authority,
+            is_signer: true,
+            is_writable: false,
+        },
+    ];
+
+    let data = TokenInstruction::MintToChecked { amount, decimals }.serialize();
+
+    Instruction {
+        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        accounts,
+        data,
+    }
+}
+
+/// Burn tokens from an account, asserting the token mint and decimals
+pub fn burn_checked(
+    account: &Pubkey,
+    mint: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    decimals: u8,
+) -> Instruction {
+    let accounts = vec![
+        AccountMeta {
+            pubkey: *account,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *mint,
+            is_signer: false,
+            is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *authority,
+            is_signer: true,
+            is_writable: false,
+        },
+    ];
+
+    let data = TokenInstruction::BurnChecked { amount, decimals }.serialize();
+
+    Instruction {
+        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        accounts,
+        data,
+    }
+}
+
+/// Sync native instruction
+pub fn sync_native(account: &Pubkey) -> Instruction {
+    let accounts = vec![AccountMeta {
+        pubkey: *account,
+        is_signer: false,
+        is_writable: true,
+    }];
+
+    let data = TokenInstruction::SyncNative.serialize();
+
+    Instruction {
+        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        accounts,
+        data,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Pubkey;
+
+    // Use the same public keys as in the JavaScript test file
+    fn mint_pubkey() -> Pubkey {
+        Pubkey::from_base58("7o36UsWR1JQLpZ9PE2gn9L4SQ69CNNiWAXd4Jt7rqz9Z").unwrap()
+    }
+
+    fn token_pubkey() -> Pubkey {
+        Pubkey::from_base58("DShWnroshVbeUp28oopA3Pu7oFPDBtC1DBmPECXXAQ9n").unwrap()
+    }
+
+    fn authority_pubkey() -> Pubkey {
+        Pubkey::from_base58("Hozo7TadHq6PMMiGLGNvgk79Hvj5VTAM7Ny2bamQ2m8q").unwrap()
+    }
+
+    fn payer_pubkey() -> Pubkey {
+        Pubkey::from_base58("3ECJhLBQ9DAuKBKNjQGLEk3YqoFcF1YvhdayQ2C96eXF").unwrap()
+    }
+
+    #[test]
+    fn test_transfer() {
+        let source = mint_pubkey();
+        let destination = token_pubkey();
+        let owner = authority_pubkey();
+        let amount = 123u64;
+
+        let instruction = transfer(&source, &destination, &owner, amount);
+
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, source);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, destination);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, owner);
+        assert!(instruction.accounts[2].is_signer);
+
+        // Check data - should be [3] (transfer instruction) followed by amount bytes
+        let expected_data = {
+            let mut data = vec![3];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_transfer_checked() {
+        let source = token_pubkey();
+        let destination = payer_pubkey();
+        let mint = mint_pubkey();
+        let owner = authority_pubkey();
+        let amount = 123u64;
+        let decimals = 10u8;
+
+        let instruction = transfer_checked(&source, &destination, &mint, &owner, amount, decimals);
+
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 4);
+        assert_eq!(instruction.accounts[0].pubkey, source);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, mint);
+        assert!(!instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, destination);
+        assert!(instruction.accounts[2].is_writable);
+        assert_eq!(instruction.accounts[3].pubkey, owner);
+        assert!(instruction.accounts[3].is_signer);
+
+        // Check data - should be [12] (transfer checked instruction) followed by amount bytes and decimals
+        let expected_data = {
+            let mut data = vec![12];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data.push(decimals);
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_mint_to_checked() {
+        let mint = mint_pubkey();
+        let token = token_pubkey();
+        let mint_authority = authority_pubkey();
+        let amount = 123u64;
+        let decimals = 10u8;
+
+        let instruction = mint_to_checked(&mint, &token, &mint_authority, amount, decimals);
+
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, mint);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, token);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, mint_authority);
+        assert!(instruction.accounts[2].is_signer);
+
+        // Check data - should be [14] (mint to checked instruction) followed by amount bytes and decimals
+        let expected_data = {
+            let mut data = vec![14];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data.push(decimals);
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_burn_checked() {
+        let account = mint_pubkey();
+        let mint = token_pubkey();
+        let authority = authority_pubkey();
+        let amount = 123u64;
+        let decimals = 10u8;
+
+        let instruction = burn_checked(&account, &mint, &authority, amount, decimals);
+
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, mint);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, authority);
+        assert!(instruction.accounts[2].is_signer);
+
+        // Check data - should be [15] (burn checked instruction) followed by amount bytes and decimals
+        let expected_data = {
+            let mut data = vec![15];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data.push(decimals);
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_sync_native() {
+        let account = token_pubkey();
+
+        let instruction = sync_native(&account);
+
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 1);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+
+        // Check data - should be [17] (sync native instruction)
+        assert_eq!(instruction.data, vec![17]);
+    }
+}
