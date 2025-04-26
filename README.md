@@ -1,5 +1,7 @@
 # Solana Primitives
 
+[![Rust](https://github.com/hewigovens/solana-primitives/actions/workflows/rust.yml/badge.svg)](https://github.com/hewigovens/solana-primitives/actions/workflows/rust.yml)
+
 This crate provides the fundamental data structures and tools needed to construct and submit Solana transactions.
 
 ## Features
