@@ -4,8 +4,9 @@ use crate::{
 };
 use std::collections::HashMap;
 
+
 /// A builder for constructing Solana transactions
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TransactionBuilder {
     /// The instructions to include in the transaction
     instructions: Vec<Instruction>,
@@ -182,12 +183,11 @@ impl InstructionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instructions::system::create_account;
-    use crate::instructions::token::transfer_checked;
-    use crate::types::instruction::AccountMeta;
-    use crate::Pubkey;
+    use crate::instructions::{system::create_account, token::transfer_checked};
+    use crate::{types::instruction::AccountMeta, Pubkey};
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
 
-    // Real public keys from JavaScript test file
     fn system_program() -> Pubkey {
         Pubkey::from_base58("11111111111111111111111111111111").unwrap()
     }
@@ -278,44 +278,74 @@ mod tests {
 
     #[test]
     fn test_transaction_builder() {
-        // Create a simple transaction with one token transfer
-        let payer = payer_pubkey();
-        let blockhash = test_blockhash();
-        let mut tx_builder = TransactionBuilder::new(payer, blockhash);
+        use crate::types::VersionedTransaction; // Added import for deserialization
+        let recent_blockhash = "9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd";
+        let recent_blockhash_bytes = bs58::decode(recent_blockhash).into_vec().unwrap();
+        let fee_payer: Pubkey = "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC".parse().unwrap();
+        let program_id = Pubkey::from_base58("J88B7gmadHzTNGiy54c9Ms8BsEXNdB2fntFyhKpk3qoT").unwrap();
+        let data = hex::decode("a3265ce2f3698dc400000070000000000100000014000000514bcb1f9aabb904e6106bd1052b66d2706dbbb701000000006c000000000a00000085fba93ee29c604fa858a351688c01290841eafb19c63a70a475d3c7bc3bef9f000000000000000000008489b9cc07af97add00300000000000000000000000000001e83d2972d3dca3a330d60c2777ee5b8d25683c63fa359116985609830f42054050004002d16000000f0314f0cffdf8d00b6a7ce61f86164ca47c1b8b1bc2e").unwrap();
+        let mut instruction = InstructionBuilder::new(program_id).data(data);
 
-        // Add a token transfer instruction
-        let source = token_pubkey();
-        let dest = random_pubkey();
-        let owner = authority_pubkey();
-        let mint = mint_pubkey();
-        let amount = 1_000_000;
-        let decimals = 6;
+        instruction.accounts.extend_from_slice(&[
+            AccountMeta {
+                pubkey: "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka".parse().unwrap(),
+                is_signer: false,
+                is_writable: false,
+            },
+            AccountMeta {
+                pubkey: "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU".parse().unwrap(),
+                is_signer: false,
+                is_writable: true,
+            },
+            AccountMeta {
+                pubkey: "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC".parse().unwrap(),
+                is_signer: true,
+                is_writable: true,
+            },
+            AccountMeta {
+                pubkey: "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51".parse().unwrap(),
+                is_signer: false,
+                is_writable: true
+            },
+            AccountMeta {
+                pubkey: "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob".parse().unwrap(),
+                is_signer: false,
+                is_writable: true
+            },
+            AccountMeta {
+                pubkey: "11111111111111111111111111111111".parse().unwrap(),
+                is_signer: false,
+                is_writable: false
+            }
+        ]);
 
-        let transfer_ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
-        tx_builder.add_instruction(transfer_ix);
+        let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash_bytes.try_into().unwrap());
+        tx_builder.add_instruction(instruction.build());
 
-        // Build the transaction
-        let transaction = tx_builder.build().unwrap();
+        let transaction = tx_builder.build().unwrap(); 
+        println!("Transaction: {:#?}", transaction);
 
-        // Verify the transaction has the correct structure
-        assert_eq!(transaction.signatures.len(), 2); // payer + owner signatures
+        // Use the new method on Transaction to serialize
+        let tx_wire_bytes = transaction.serialize_legacy().expect("Failed to serialize transaction with wire format");
 
-        // Check that account keys are properly included
-        let account_keys = &transaction.message.account_keys;
-        assert!(account_keys.contains(&payer_pubkey())); // Fee payer
-        assert!(account_keys.contains(&source)); // Source account
-        assert!(account_keys.contains(&dest)); // Destination account
-        assert!(account_keys.contains(&owner)); // Owner
-        assert!(account_keys.contains(&mint)); // Mint
-        assert!(account_keys.contains(&token_program())); // Token program
+        let base64_tx = STANDARD.encode(&tx_wire_bytes);
+        println!("Generated Base64 TX (test_transaction_builder): {}", base64_tx);
+        println!("Generated TX wire bytes length: {}", tx_wire_bytes.len());
 
-        // Verify the instructions
-        assert_eq!(transaction.message.instructions.len(), 1);
-        let compiled_ix = &transaction.message.instructions[0];
-        assert_eq!(
-            account_keys[compiled_ix.program_id_index as usize],
-            token_program()
-        );
+        // Deserialize and verify
+        let deserialized_vt = VersionedTransaction::deserialize_with_version(&tx_wire_bytes)
+            .expect("Failed to deserialize wire bytes into VersionedTransaction");
+
+        match deserialized_vt {
+            VersionedTransaction::Legacy { signatures: deserialized_signatures, message: deserialized_legacy_message } => {
+                assert_eq!(deserialized_signatures, transaction.signatures, "Signatures mismatch after round trip");
+                assert_eq!(deserialized_legacy_message.header, transaction.message.header, "Message header mismatch");
+                assert_eq!(deserialized_legacy_message.account_keys, transaction.message.account_keys, "Account keys mismatch");
+                assert_eq!(deserialized_legacy_message.recent_blockhash, transaction.message.recent_blockhash, "Recent blockhash mismatch");
+                assert_eq!(deserialized_legacy_message.instructions, transaction.message.instructions, "Instructions mismatch");
+            }
+            _ => panic!("Deserialized transaction is not the expected Legacy variant"),
+        }
     }
 
     #[test]

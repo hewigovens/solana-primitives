@@ -2,8 +2,6 @@ use crate::types::{
     CompiledInstruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey, SignatureBytes,
     VersionedMessage, VersionedMessageV0,
 };
-#[cfg(feature = "bincode-serialize")]
-use bincode;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
@@ -114,24 +112,30 @@ impl Transaction {
         }
     }
 
-    #[cfg(feature = "bincode-serialize")]
-    /// Serialize the transaction to bytes using bincode
-    ///
-    /// This method is only available when the `bincode-serialize` feature is enabled.
-    pub fn serialize_bincode(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap_or_default()
+    /// Serializes the full transaction into the Solana legacy wire format.
+    pub fn serialize_legacy(&self) -> Result<Vec<u8>, String> {
+        let mut tx_wire_bytes: Vec<u8> = Vec::new();
+
+        // 1. Number of signatures (as a single byte)
+        if self.signatures.len() > 255 {
+            // Consider using a custom error type if this library has one
+            return Err("Too many signatures for legacy transaction format (u8 limit)".to_string());
+        }
+        tx_wire_bytes.push(self.signatures.len() as u8);
+
+        // 2. Signatures
+        for sig_bytes_wrapper in &self.signatures {
+            tx_wire_bytes.extend_from_slice(sig_bytes_wrapper.as_bytes());
+        }
+
+        // 3. Serialized Message
+        // The `serialize_for_signing` method in `Message` already returns Result<Vec<u8>, String>
+        let serialized_message = self.message.serialize_for_signing()?; // Propagate error if any
+        tx_wire_bytes.extend_from_slice(&serialized_message);
+        
+        Ok(tx_wire_bytes)
     }
 
-    #[cfg(feature = "bincode-serialize")]
-    /// Deserialize a transaction from bytes using bincode directly
-    ///
-    /// This method is only available when the `bincode-serialize` feature is enabled.
-    pub fn deserialize_bincode(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        match bincode::deserialize(bytes) {
-            Ok(tx) => Ok(tx),
-            Err(e) => Err(format!("Failed to deserialize transaction: {}", e).into()),
-        }
-    }
 }
 
 /// Versioned transaction format
@@ -262,38 +266,6 @@ impl VersionedTransaction {
         self::manual_decode::decode_message(message_bytes, signatures)
     }
 
-    #[cfg(feature = "bincode-serialize")]
-    /// Serialize the versioned transaction to bytes using bincode
-    ///
-    /// This method is only available when the `bincode-serialize` feature is enabled.
-    pub fn serialize_bincode(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap_or_default()
-    }
-
-    #[cfg(feature = "bincode-serialize")]
-    /// Deserialize a versioned transaction from bytes using bincode directly.
-    /// Note: This expects data serialized with bincode, not Solana's wire format.
-    /// Use deserialize_with_version for Solana's wire format.
-    ///
-    /// This method is only available when the `bincode-serialize` feature is enabled.
-    pub fn deserialize_bincode(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        match bincode::deserialize(bytes) {
-            Ok(tx) => Ok(tx),
-            Err(e) => Err(format!("Failed to deserialize transaction: {}", e).into()),
-        }
-    }
-
-    #[cfg(feature = "bincode-serialize")]
-    /// Convert a transaction in Solana's wire format to bincode format for more efficient processing
-    ///
-    /// This method is only available when the `bincode-serialize` feature is enabled.
-    pub fn to_bincode_format(wire_format: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        // First decode using the manual decoder that handles Solana's wire format
-        let transaction = Self::deserialize_with_version(wire_format)?;
-
-        // Then re-encode with bincode for more efficient processing
-        Ok(transaction.serialize_bincode())
-    }
 }
 
 /// Module for manual decoding of Solana message format
@@ -711,78 +683,4 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "bincode-serialize")]
-    #[test]
-    fn test_bincode_serialization() {
-        // Create a test transaction
-        let message = VersionedMessage::V0(VersionedMessageV0 {
-            header: MessageHeader {
-                num_required_signatures: 1,
-                num_readonly_signed_accounts: 0,
-                num_readonly_unsigned_accounts: 1,
-            },
-            account_keys: vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])],
-            recent_blockhash: [0u8; 32],
-            instructions: vec![CompiledInstruction {
-                program_id_index: 1,
-                accounts: vec![0],
-                data: vec![1, 2, 3],
-            }],
-            address_table_lookups: Vec::new(),
-        });
-        let mut transaction = VersionedTransaction::new(message);
-
-        // Add a signature
-        let signature = SignatureBytes::new([1; 64]);
-        transaction.add_signature(signature);
-
-        // Serialize using bincode
-        let bincode_serialized = transaction.serialize_bincode();
-
-        // Deserialize using bincode
-        let bincode_deserialized = VersionedTransaction::deserialize_bincode(&bincode_serialized)
-            .expect("Failed to deserialize with bincode");
-
-        // Verify they match
-        match (&transaction, &bincode_deserialized) {
-            (
-                VersionedTransaction::V0 {
-                    signatures: orig_sigs,
-                    message: orig_msg,
-                },
-                VersionedTransaction::V0 {
-                    signatures: new_sigs,
-                    message: new_msg,
-                },
-            ) => {
-                assert_eq!(orig_sigs.len(), new_sigs.len());
-                assert_eq!(orig_sigs[0], new_sigs[0]);
-                assert_eq!(
-                    orig_msg.header.num_required_signatures,
-                    new_msg.header.num_required_signatures
-                );
-                assert_eq!(
-                    orig_msg.header.num_readonly_signed_accounts,
-                    new_msg.header.num_readonly_signed_accounts
-                );
-                assert_eq!(
-                    orig_msg.header.num_readonly_unsigned_accounts,
-                    new_msg.header.num_readonly_unsigned_accounts
-                );
-                assert_eq!(orig_msg.account_keys.len(), new_msg.account_keys.len());
-                assert_eq!(orig_msg.recent_blockhash, new_msg.recent_blockhash);
-                assert_eq!(orig_msg.instructions.len(), new_msg.instructions.len());
-                assert_eq!(
-                    orig_msg.instructions[0].program_id_index,
-                    new_msg.instructions[0].program_id_index
-                );
-                assert_eq!(
-                    orig_msg.instructions[0].accounts,
-                    new_msg.instructions[0].accounts
-                );
-                assert_eq!(orig_msg.instructions[0].data, new_msg.instructions[0].data);
-            }
-            _ => panic!("Expected V0 transactions"),
-        }
-    }
 }

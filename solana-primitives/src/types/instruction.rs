@@ -25,7 +25,7 @@ pub struct AccountMeta {
 }
 
 /// A compiled instruction that references accounts by their indices
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct CompiledInstruction {
     /// Index into the account keys array indicating the program to execute
     pub program_id_index: u8,

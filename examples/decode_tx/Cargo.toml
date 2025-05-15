@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-solana-primitives = { path = "../../solana-primitives", features = [
-    "bincode-serialize",
-] }
+solana-primitives = { path = "../../solana-primitives" }
 base64.workspace = true
 borsh.workspace = true
 bs58.workspace = true

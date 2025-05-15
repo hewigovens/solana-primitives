@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 /// The message header, identifying signed and read-only `account_keys`.
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct MessageHeader {
     /// The number of signatures required for this message to be considered valid.
     pub num_required_signatures: u8,
@@ -92,6 +92,55 @@ impl Message {
     /// Get the number of read-only unsigned accounts
     pub fn num_readonly_unsigned_accounts(&self) -> u8 {
         self.header.num_readonly_unsigned_accounts
+    }
+
+    /// Serializes the message into the byte format required for signing
+    /// and for the legacy transaction wire format.
+    /// Note: This uses u8 for array lengths, matching the existing manual_decode logic.
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
+        let mut m_wire_bytes: Vec<u8> = Vec::new();
+
+        // 1. Header (3 bytes)
+        m_wire_bytes.push(self.header.num_required_signatures);
+        m_wire_bytes.push(self.header.num_readonly_signed_accounts);
+        m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
+
+        // 2. Account keys
+        if self.account_keys.len() > 255 {
+            return Err("Too many account keys for u8 length encoding".to_string());
+        }
+        m_wire_bytes.push(self.account_keys.len() as u8); // Account count as u8
+        for pubkey in &self.account_keys {
+            m_wire_bytes.extend_from_slice(pubkey.as_bytes()); 
+        }
+
+        // 3. Recent blockhash (32 bytes)
+        m_wire_bytes.extend_from_slice(&self.recent_blockhash);
+
+        // 4. Instructions
+        if self.instructions.len() > 255 {
+            return Err("Too many instructions for u8 length encoding".to_string());
+        }
+        m_wire_bytes.push(self.instructions.len() as u8); // Instruction count as u8
+        for instruction_item in &self.instructions { 
+            // program_id_index (1 byte)
+            m_wire_bytes.push(instruction_item.program_id_index);
+
+            // accounts (Vec<u8>) - these are indices
+            if instruction_item.accounts.len() > 255 {
+                return Err("Too many account indices in instruction for u8 length encoding".to_string());
+            }
+            m_wire_bytes.push(instruction_item.accounts.len() as u8); // Account indices count as u8
+            m_wire_bytes.extend_from_slice(&instruction_item.accounts);
+
+            // data (Vec<u8>)
+            if instruction_item.data.len() > 255 {
+                return Err("Too much data in instruction for u8 length encoding".to_string());
+            }
+            m_wire_bytes.push(instruction_item.data.len() as u8); // Data length as u8
+            m_wire_bytes.extend_from_slice(&instruction_item.data);
+        }
+        Ok(m_wire_bytes)
     }
 }
 
