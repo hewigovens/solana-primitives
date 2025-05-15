@@ -329,8 +329,6 @@ mod tests {
         let tx_wire_bytes = transaction.serialize_legacy().expect("Failed to serialize transaction with wire format");
 
         let base64_tx = STANDARD.encode(&tx_wire_bytes);
-        println!("Generated Base64 TX (test_transaction_builder): {}", base64_tx);
-        println!("Generated TX wire bytes length: {}", tx_wire_bytes.len());
 
         // Deserialize and verify
         let deserialized_vt = VersionedTransaction::deserialize_with_version(&tx_wire_bytes)
