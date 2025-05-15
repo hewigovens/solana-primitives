@@ -1,6 +1,6 @@
 [package]
 name = "solana-primitives"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Fundamental data structures and tools needed to construct and submit Solana transactions."
 license = "MIT"
