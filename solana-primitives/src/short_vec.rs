@@ -1,4 +1,5 @@
 // Compact serde-encoding of vectors with small length.
+use borsh::{BorshSerialize, BorshDeserialize};
 
 use serde::{
     de::{self, Deserializer, SeqAccess, Visitor},
@@ -200,50 +201,159 @@ where
     }
 }
 
+// Helper function to encode a usize length into Compact-U16 format bytes.
+// Returns a Vec<u8> with the encoded length or an Err if length is too large for u16.
+pub fn encode_length_to_compact_u16_bytes(len: usize) -> Result<Vec<u8>, String> {
+    if len > u16::MAX as usize {
+        return Err(format!(
+            "Length {} exceeds u16::MAX, cannot encode as Compact-U16",
+            len
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut rem_val = len as u16; // Safe to cast now
+    loop {
+        let mut elem = (rem_val & 0x7f) as u8;
+        rem_val >>= 7;
+        if rem_val == 0 {
+            bytes.push(elem);
+            break;
+        } else {
+            elem |= 0x80; // More bytes to follow, set MSB
+            bytes.push(elem);
+        }
+    }
+    Ok(bytes)
+}
+
+// Helper function to decode Compact-U16 length
+// Returns Ok((length, bytes_consumed)) or Err(message)
+pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), &'static str> {
+    if bytes.is_empty() {
+        return Err("Cannot decode length from empty slice");
+    }
+    let mut len: usize = 0;
+    let mut size_of_len_encoding: usize = 0;
+    loop {
+        if size_of_len_encoding >= bytes.len() {
+            return Err("Byte slice too short for compact u16 length (within loop)");
+        }
+        let current_byte = bytes[size_of_len_encoding];
+        len |= (current_byte as usize & 0x7F) << (size_of_len_encoding * 7);
+        size_of_len_encoding += 1;
+        if (current_byte & 0x80) == 0 { // MSB is 0, this is the last byte for the length
+            break;
+        }
+        // According to Solana's short_vec.rs, max 3 bytes for u16 values (up to 65535)
+        // 1 byte for 0-127
+        // 2 bytes for 128 - 16383
+        // 3 bytes for 16384 - 2097151 (but u16::MAX is 65535, so it's 16384 - 65535)
+        if size_of_len_encoding >= 3 && (current_byte & 0x80) != 0 { 
+            // If we've read 3 bytes and the 3rd byte still has MSB set, it's an invalid encoding for u16.
+            // Or if we are about to read a 4th byte for a u16 value.
+            // This check is to prevent overruns for u16. If len can be > u16::MAX, this check changes.
+            // For typical Solana message elements, lengths are expected to fit u16.
+             return Err("Compact u16 length encoding too long (max 3 bytes for u16 values)");
+        }
+    }
+    // Final check: if the decoded length requires more than a u16, it's an error
+    // for contexts strictly expecting u16 lengths (like typical Solana vectors).
+    if len > u16::MAX as usize {
+        // This specific check might be context-dependent. If larger lengths are possible
+        // and the Compact-U16 encoding supports them (it does, up to u64 essentially),
+        // then this check would be removed or adjusted.
+        // For Solana message elements, they are typically u16-limited.
+        // return Err("Decoded length exceeds u16::MAX");
+        // Let's rely on consuming code to handle > u16 if necessary, this decoder handles the bytes.
+    }
+    Ok((len, size_of_len_encoding))
+}
+
 /// If you don't want to use the ShortVec newtype, you can do ShortVec
 /// deserialization on an ordinary vector with the following field annotation:
 ///
-/// #[serde(with = "short_vec")]
+/// #[serde(with = "short_vec::deserialize")]
 pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    let visitor = ShortVecVisitor { _t: PhantomData };
-    deserializer.deserialize_tuple(usize::MAX, visitor)
+    deserializer.deserialize_seq(ShortVecVisitor { _t: PhantomData })
 }
 
-pub struct ShortVec<T>(pub Vec<T>);
-
-impl<T: Serialize> Serialize for ShortVec<T> {
+/// A newtype to provide Compact-U16 (AKA short_vec) serialization for `Vec<T>`
+impl<T> Serialize for ShortVec<T>
+where
+    T: Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serialize(&self.0, serializer)
+        // Calls the module-level serialize function
+        self::serialize(&self.inner, serializer)
     }
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for ShortVec<T> {
-    fn deserialize<D>(deserializer: D) -> Result<ShortVec<T>, D::Error>
+impl<'de, T> Deserialize<'de> for ShortVec<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserialize(deserializer).map(ShortVec)
+        // Calls the module-level deserialize function
+        Ok(ShortVec { inner: self::deserialize(deserializer)? })
     }
 }
 
-/// Return the decoded value and how many bytes it consumed.
-#[allow(clippy::result_unit_err)]
-pub fn decode_shortu16_len(bytes: &[u8]) -> Result<(usize, usize), ()> {
-    let mut val = 0;
-    for (nth_byte, byte) in bytes.iter().take(MAX_ENCODING_LENGTH).enumerate() {
-        match visit_byte(*byte, val, nth_byte).map_err(|_| ())? {
-            VisitStatus::More(new_val) => val = new_val,
-            VisitStatus::Done(new_val) => {
-                return Ok((usize::from(new_val), nth_byte.saturating_add(1)))
-            }
-        }
-    }
-    Err(())
+#[derive(BorshSerialize, BorshDeserialize)] // Derives for Borsh
+pub struct ShortVec<T> {
+    pub inner: Vec<T>,
 }
+
+// Manual impls for common traits, forwarding to Vec<T>
+// We need to be careful with bounds if T itself is complex.
+impl<T: Clone> Clone for ShortVec<T> {
+    fn clone(&self) -> Self {
+        ShortVec { inner: self.inner.clone() }
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ShortVec<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ShortVec").field(&self.inner).finish()
+    }
+}
+
+impl<T: PartialEq> PartialEq for ShortVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+// Add a constructor and a way to get the inner Vec
+impl<T> ShortVec<T> {
+    pub fn new(inner: Vec<T>) -> Self {
+        ShortVec { inner }
+    }
+
+    pub fn into_inner(self) -> Vec<T> {
+        self.inner
+    }
+
+    // Optional: provide a way to borrow the inner vec
+    pub fn as_inner(&self) -> &Vec<T> {
+        &self.inner
+    }
+
+    pub fn as_mut_inner(&mut self) -> &mut Vec<T> {
+        &mut self.inner
+    }
+}
+
+// We still need to ensure T itself is bound correctly where ShortVec<T> is used.
+// For Borsh: T must be BorshSerialize + BorshDeserialize.
+// For Serde (via our custom impls): T must be Serialize + Deserialize<'de>.
+// The derive for BorshSerialize/Deserialize on ShortVec<T> will require T to also implement them for Vec<T>.

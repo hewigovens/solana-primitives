@@ -9,10 +9,10 @@ pub struct MessageAddressTableLookup {
     /// Address lookup table account key
     pub account_key: Pubkey,
     /// List of indices used to load writable account addresses
-    #[serde(with = "crate::utils::short_vec")]
+    #[serde(with = "crate::short_vec")]
     pub writable_indexes: Vec<u8>,
     /// List of indices used to load readonly account addresses
-    #[serde(with = "crate::utils::short_vec")]
+    #[serde(with = "crate::short_vec")]
     pub readonly_indexes: Vec<u8>,
 }
 

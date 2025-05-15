@@ -70,7 +70,7 @@ checksum = "89e25b6adfb930f02d1981565a6e5d9c547ac15a96606256d3b59040e5cd4ca3"
 
 [[package]]
 name = "basic-example"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "borsh",
  "solana-primitives",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "decode-tx-example"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "base64",
  "borsh",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "solana-primitives"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "borsh",

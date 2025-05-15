@@ -6,13 +6,15 @@ use std::collections::HashMap;
 
 
 /// A builder for constructing Solana transactions
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TransactionBuilder {
+    /// The fee payer for the transaction
+    fee_payer: Pubkey,
     /// The instructions to include in the transaction
     instructions: Vec<Instruction>,
     /// The recent blockhash
     recent_blockhash: [u8; 32],
-    /// A map of account public keys to their metadata
+    /// A map of account public keys to their metadata, including the fee payer
     account_metas: HashMap<Pubkey, AccountMeta>,
 }
 
@@ -30,6 +32,7 @@ impl TransactionBuilder {
         );
 
         Self {
+            fee_payer, // Store the fee_payer
             instructions: Vec::new(),
             recent_blockhash,
             account_metas,
@@ -38,7 +41,7 @@ impl TransactionBuilder {
 
     /// Add an instruction to the transaction
     pub fn add_instruction(&mut self, instruction: Instruction) -> &mut Self {
-        // Add program ID to account metas to ensure it's included in the account keys
+        // Add program ID to account metas. Program IDs are typically not signers and are read-only (executable).
         self.account_metas
             .entry(instruction.program_id)
             .or_insert_with(|| AccountMeta {
@@ -47,10 +50,15 @@ impl TransactionBuilder {
                 is_writable: false,
             });
 
-        // Add all accounts from the instruction to our account metas
+        // Add all accounts from the instruction to our account_metas, merging properties.
+        // If an account is used in multiple instructions, its signer/writable status is the OR of all uses.
         for account_meta in &instruction.accounts {
             self.account_metas
                 .entry(account_meta.pubkey)
+                .and_modify(|existing_meta| {
+                    existing_meta.is_signer = existing_meta.is_signer || account_meta.is_signer;
+                    existing_meta.is_writable = existing_meta.is_writable || account_meta.is_writable;
+                })
                 .or_insert_with(|| account_meta.clone());
         }
         self.instructions.push(instruction);
@@ -59,9 +67,69 @@ impl TransactionBuilder {
 
     /// Build the transaction
     pub fn build(self) -> Result<Transaction> {
-        // Convert account metas to a vector and sort them
-        let mut account_keys: Vec<Pubkey> = self.account_metas.keys().copied().collect();
-        account_keys.sort();
+        let mut final_account_keys = Vec::new();
+        // HashSet to track keys already added to final_account_keys to prevent duplicates,
+        // though the categorization should handle distinct roles.
+        let mut processed_keys = std::collections::HashSet::new();
+
+        // 1. Fee payer first
+        final_account_keys.push(self.fee_payer);
+        processed_keys.insert(self.fee_payer);
+
+        let mut writable_signers = Vec::new();
+        let mut readonly_signers = Vec::new();
+        let mut writable_non_signers = Vec::new();
+        let mut readonly_non_signers = Vec::new();
+
+        // Categorize all other accounts from account_metas
+        for (pubkey, meta) in &self.account_metas {
+            if *pubkey == self.fee_payer { // Already added
+                continue;
+            }
+            if meta.is_signer {
+                if meta.is_writable {
+                    writable_signers.push(*pubkey);
+                } else {
+                    readonly_signers.push(*pubkey);
+                }
+            } else {
+                if meta.is_writable {
+                    writable_non_signers.push(*pubkey);
+                } else {
+                    readonly_non_signers.push(*pubkey);
+                }
+            }
+        }
+
+        // Sort within categories for deterministic output
+        writable_signers.sort();
+        readonly_signers.sort();
+        writable_non_signers.sort();
+        readonly_non_signers.sort();
+
+        // Append categorized keys to final_account_keys, ensuring no duplicates from previous categories
+        for key in writable_signers {
+            if processed_keys.insert(key) { // insert returns true if value was newly inserted
+                final_account_keys.push(key);
+            }
+        }
+        for key in readonly_signers {
+            if processed_keys.insert(key) {
+                final_account_keys.push(key);
+            }
+        }
+        for key in writable_non_signers {
+            if processed_keys.insert(key) {
+                final_account_keys.push(key);
+            }
+        }
+        for key in readonly_non_signers {
+            if processed_keys.insert(key) {
+                final_account_keys.push(key);
+            }
+        }
+
+        let account_keys: Vec<Pubkey> = final_account_keys;
 
         // Create a map of pubkey to index for quick lookups
         let key_to_index: HashMap<Pubkey, u8> = account_keys
@@ -329,6 +397,7 @@ mod tests {
         let tx_wire_bytes = transaction.serialize_legacy().expect("Failed to serialize transaction with wire format");
 
         let base64_tx = STANDARD.encode(&tx_wire_bytes);
+        println!("Base64 transaction: {}", base64_tx);
 
         // Deserialize and verify
         let deserialized_vt = VersionedTransaction::deserialize_with_version(&tx_wire_bytes)

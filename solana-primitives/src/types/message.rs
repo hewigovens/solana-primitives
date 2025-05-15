@@ -1,5 +1,6 @@
 use crate::types::{CompiledInstruction, MessageAddressTableLookup, Pubkey};
 use borsh::{BorshDeserialize, BorshSerialize};
+
 use serde::{Deserialize, Serialize};
 
 /// The message header, identifying signed and read-only `account_keys`.
@@ -106,10 +107,8 @@ impl Message {
         m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
 
         // 2. Account keys
-        if self.account_keys.len() > 255 {
-            return Err("Too many account keys for u8 length encoding".to_string());
-        }
-        m_wire_bytes.push(self.account_keys.len() as u8); // Account count as u8
+        let account_keys_len_bytes = crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
+        m_wire_bytes.extend_from_slice(&account_keys_len_bytes);
         for pubkey in &self.account_keys {
             m_wire_bytes.extend_from_slice(pubkey.as_bytes()); 
         }
@@ -118,26 +117,20 @@ impl Message {
         m_wire_bytes.extend_from_slice(&self.recent_blockhash);
 
         // 4. Instructions
-        if self.instructions.len() > 255 {
-            return Err("Too many instructions for u8 length encoding".to_string());
-        }
-        m_wire_bytes.push(self.instructions.len() as u8); // Instruction count as u8
+        let instructions_len_bytes = crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
+        m_wire_bytes.extend_from_slice(&instructions_len_bytes);
         for instruction_item in &self.instructions { 
             // program_id_index (1 byte)
             m_wire_bytes.push(instruction_item.program_id_index);
 
             // accounts (Vec<u8>) - these are indices
-            if instruction_item.accounts.len() > 255 {
-                return Err("Too many account indices in instruction for u8 length encoding".to_string());
-            }
-            m_wire_bytes.push(instruction_item.accounts.len() as u8); // Account indices count as u8
+            let accounts_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
+            m_wire_bytes.extend_from_slice(&accounts_len_bytes);
             m_wire_bytes.extend_from_slice(&instruction_item.accounts);
 
             // data (Vec<u8>)
-            if instruction_item.data.len() > 255 {
-                return Err("Too much data in instruction for u8 length encoding".to_string());
-            }
-            m_wire_bytes.push(instruction_item.data.len() as u8); // Data length as u8
+            let data_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
+            m_wire_bytes.extend_from_slice(&data_len_bytes);
             m_wire_bytes.extend_from_slice(&instruction_item.data);
         }
         Ok(m_wire_bytes)
