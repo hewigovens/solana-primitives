@@ -104,6 +104,25 @@ impl RpcClient {
         TransactionMethods::send_transaction(&self.client, &self.url, transaction).await
     }
 
+    /// Submit a transaction (backward compatibility alias for send_transaction)
+    pub async fn submit_transaction(&self, transaction: &[u8]) -> Result<String> {
+        // For now, this is a placeholder that calls the legacy RPC client
+        // In a full implementation, this would convert the bytes to a VersionedTransaction
+        // and call send_transaction, or implement the actual RPC call
+        use crate::jsonrpc::RpcClient as LegacyRpcClient;
+        let legacy_client = LegacyRpcClient::new(self.url.clone());
+        legacy_client.submit_transaction(transaction).await
+    }
+
+    /// Get the latest blockhash (backward compatibility method)
+    pub async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64)> {
+        // For now, this is a placeholder that calls the legacy RPC client
+        // In a full implementation, this would be implemented using the new RPC method structure
+        use crate::jsonrpc::RpcClient as LegacyRpcClient;
+        let legacy_client = LegacyRpcClient::new(self.url.clone());
+        legacy_client.get_latest_blockhash().await
+    }
+
     /// Simulate a transaction
     pub async fn simulate_transaction(
         &self,
