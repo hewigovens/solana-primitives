@@ -138,23 +138,7 @@ pub struct RpcTransactionReturnData {
     pub data: (String, String),
 }
 
-/// Subscription configuration
-#[derive(Debug, Clone)]
-pub struct SubscriptionConfig {
-    /// Commitment level
-    pub commitment: Option<String>,
-    /// Encoding format
-    pub encoding: Option<String>,
-}
 
-/// Account subscription handle
-#[derive(Debug, Clone)]
-pub struct AccountSubscription {
-    /// Subscription ID
-    pub id: u64,
-    /// Account public key
-    pub pubkey: Pubkey,
-}
 
 #[cfg(test)]
 mod tests {

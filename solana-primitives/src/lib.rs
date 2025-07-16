@@ -41,9 +41,6 @@ pub use jsonrpc::RpcClient as LegacyRpcClient; // Keep old client for backward c
 #[cfg(feature = "jsonrpc")]
 pub use rpc::RpcClient;
 
-#[cfg(feature = "websocket")]
-pub use rpc::WebSocketClient;
-
 // Re-export testing utilities
 #[cfg(feature = "testing")]
 pub use testing::*;
