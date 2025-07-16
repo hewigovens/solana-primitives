@@ -4,17 +4,46 @@ pub mod error;
 pub mod instructions;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
+#[cfg(feature = "jsonrpc")]
+pub mod rpc;
 pub mod types;
+pub mod utils;
 pub mod borsh_helpers;
 pub mod short_vec;
+#[cfg(feature = "testing")]
+pub mod testing;
 
-pub use builder::{InstructionBuilder, TransactionBuilder};
+// Re-export enhanced builders
+pub use builder::{InstructionBuilder, TransactionBuilder, VersionedTransactionBuilder, TransactionVersion};
+
+// Re-export crypto functionality
 pub use crypto::*;
+
+// Re-export error types
 pub use error::{Result, SolanaError};
+
+// Re-export instruction builders
 pub use instructions::*;
+
+// Re-export core types
 pub use types::*;
+
+// Re-export utilities
+pub use utils::*;
+
+// Re-export legacy helpers for backward compatibility
 pub use borsh_helpers::{compact_array_to_bytes, bytes_to_compact_array};
 pub use short_vec::{ShortU16, ShortVec, encode_length_to_compact_u16_bytes, decode_compact_u16_len};
 
+// Re-export RPC clients
 #[cfg(feature = "jsonrpc")]
-pub use jsonrpc::RpcClient;
+pub use jsonrpc::RpcClient as LegacyRpcClient; // Keep old client for backward compatibility
+#[cfg(feature = "jsonrpc")]
+pub use rpc::RpcClient;
+
+#[cfg(feature = "websocket")]
+pub use rpc::WebSocketClient;
+
+// Re-export testing utilities
+#[cfg(feature = "testing")]
+pub use testing::*;

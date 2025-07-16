@@ -15,11 +15,19 @@ serde.workspace = true
 sha2.workspace = true
 base64.workspace = true
 hex.workspace = true
+rand.workspace = true
+log.workspace = true
 
 # Optional dependencies
 serde_json = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [features]
+default = ["jsonrpc"]
 jsonrpc = ["dep:serde_json", "dep:reqwest", "dep:tokio"]
+websocket = ["dep:tokio-tungstenite", "dep:futures-util", "dep:uuid", "jsonrpc"]
+testing = ["dep:uuid"]

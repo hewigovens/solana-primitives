@@ -14,7 +14,7 @@ pub struct Instruction {
 }
 
 /// Metadata about an account in an instruction
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct AccountMeta {
     /// The account's public key
     pub pubkey: Pubkey,

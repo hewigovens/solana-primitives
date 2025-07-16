@@ -1,9 +1,10 @@
+//! Enhanced transaction builder
+
 use crate::{
     AccountMeta, CompiledInstruction, Instruction, Message, MessageHeader, Pubkey, Result,
     SignatureBytes, Transaction,
 };
 use std::collections::HashMap;
-
 
 /// A builder for constructing Solana transactions
 #[derive(Debug)]
@@ -32,7 +33,7 @@ impl TransactionBuilder {
         );
 
         Self {
-            fee_payer, // Store the fee_payer
+            fee_payer,
             instructions: Vec::new(),
             recent_blockhash,
             account_metas,
@@ -83,7 +84,8 @@ impl TransactionBuilder {
 
         // Categorize all other accounts from account_metas
         for (pubkey, meta) in &self.account_metas {
-            if *pubkey == self.fee_payer { // Already added
+            if *pubkey == self.fee_payer {
+                // Already added
                 continue;
             }
             if meta.is_signer {
@@ -109,7 +111,8 @@ impl TransactionBuilder {
 
         // Append categorized keys to final_account_keys, ensuring no duplicates from previous categories
         for key in writable_signers {
-            if processed_keys.insert(key) { // insert returns true if value was newly inserted
+            if processed_keys.insert(key) {
+                // insert returns true if value was newly inserted
                 final_account_keys.push(key);
             }
         }
@@ -201,53 +204,6 @@ impl TransactionBuilder {
     }
 }
 
-/// A builder for constructing Solana instructions
-#[derive(Debug)]
-pub struct InstructionBuilder {
-    /// The program ID that will process this instruction
-    program_id: Pubkey,
-    /// The accounts that will be read from or written to
-    accounts: Vec<AccountMeta>,
-    /// The instruction data
-    data: Vec<u8>,
-}
-
-impl InstructionBuilder {
-    /// Create a new instruction builder
-    pub fn new(program_id: Pubkey) -> Self {
-        Self {
-            program_id,
-            accounts: Vec::new(),
-            data: Vec::new(),
-        }
-    }
-
-    /// Add an account to the instruction
-    pub fn account(mut self, pubkey: Pubkey, is_signer: bool, is_writable: bool) -> Self {
-        self.accounts.push(AccountMeta {
-            pubkey,
-            is_signer,
-            is_writable,
-        });
-        self
-    }
-
-    /// Set the instruction data
-    pub fn data(mut self, data: Vec<u8>) -> Self {
-        self.data = data;
-        self
-    }
-
-    /// Build the instruction
-    pub fn build(self) -> Instruction {
-        Instruction {
-            program_id: self.program_id,
-            accounts: self.accounts,
-            data: self.data,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,96 +261,75 @@ mod tests {
     }
 
     #[test]
-    fn test_instruction_builder() {
-        let program_id = token_program();
-        let source = token_pubkey();
-        let dest = random_pubkey();
-        let owner = authority_pubkey();
-        let mint = mint_pubkey();
-        let amount = 1_000_000;
-        let decimals = 6;
-
-        // Build the instruction
-        let mut builder = InstructionBuilder::new(program_id);
-        builder.accounts.push(AccountMeta {
-            pubkey: source,
-            is_signer: false,
-            is_writable: true,
-        });
-        builder.accounts.push(AccountMeta {
-            pubkey: mint,
-            is_signer: false,
-            is_writable: false,
-        });
-        builder.accounts.push(AccountMeta {
-            pubkey: dest,
-            is_signer: false,
-            is_writable: true,
-        });
-        builder.accounts.push(AccountMeta {
-            pubkey: owner,
-            is_signer: true,
-            is_writable: false,
-        });
-
-        let ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
-
-        // Check program ID
-        assert_eq!(builder.program_id, token_program());
-        assert_eq!(ix.program_id, token_program());
-    }
-
-    #[test]
     fn test_transaction_builder() {
         use crate::types::VersionedTransaction; // Added import for deserialization
         let recent_blockhash = "9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd";
         let recent_blockhash_bytes = bs58::decode(recent_blockhash).into_vec().unwrap();
-        let fee_payer: Pubkey = "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC".parse().unwrap();
+        let fee_payer: Pubkey = "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC"
+            .parse()
+            .unwrap();
         let program_id = Pubkey::from_base58("J88B7gmadHzTNGiy54c9Ms8BsEXNdB2fntFyhKpk3qoT").unwrap();
         let data = hex::decode("a3265ce2f3698dc400000070000000000100000014000000514bcb1f9aabb904e6106bd1052b66d2706dbbb701000000006c000000000a00000085fba93ee29c604fa858a351688c01290841eafb19c63a70a475d3c7bc3bef9f000000000000000000008489b9cc07af97add00300000000000000000000000000001e83d2972d3dca3a330d60c2777ee5b8d25683c63fa359116985609830f42054050004002d16000000f0314f0cffdf8d00b6a7ce61f86164ca47c1b8b1bc2e").unwrap();
-        let mut instruction = InstructionBuilder::new(program_id).data(data);
-
-        instruction.accounts.extend_from_slice(&[
+        let accounts = vec![
             AccountMeta {
-                pubkey: "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka".parse().unwrap(),
+                pubkey: "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka"
+                    .parse()
+                    .unwrap(),
                 is_signer: false,
                 is_writable: false,
             },
             AccountMeta {
-                pubkey: "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU".parse().unwrap(),
+                pubkey: "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU"
+                    .parse()
+                    .unwrap(),
                 is_signer: false,
                 is_writable: true,
             },
             AccountMeta {
-                pubkey: "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC".parse().unwrap(),
+                pubkey: "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC"
+                    .parse()
+                    .unwrap(),
                 is_signer: true,
                 is_writable: true,
             },
             AccountMeta {
-                pubkey: "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51".parse().unwrap(),
+                pubkey: "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51"
+                    .parse()
+                    .unwrap(),
                 is_signer: false,
-                is_writable: true
+                is_writable: true,
             },
             AccountMeta {
-                pubkey: "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob".parse().unwrap(),
+                pubkey: "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob"
+                    .parse()
+                    .unwrap(),
                 is_signer: false,
-                is_writable: true
+                is_writable: true,
             },
             AccountMeta {
                 pubkey: "11111111111111111111111111111111".parse().unwrap(),
                 is_signer: false,
-                is_writable: false
-            }
-        ]);
+                is_writable: false,
+            },
+        ];
 
-        let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash_bytes.try_into().unwrap());
+        let instruction = crate::builder::InstructionBuilder::new(program_id)
+            .data(data)
+            .accounts(accounts);
+
+        let mut tx_builder = TransactionBuilder::new(
+            fee_payer,
+            recent_blockhash_bytes.try_into().unwrap(),
+        );
         tx_builder.add_instruction(instruction.build());
 
-        let transaction = tx_builder.build().unwrap(); 
+        let transaction = tx_builder.build().unwrap();
         println!("Transaction: {:#?}", transaction);
 
         // Use the new method on Transaction to serialize
-        let tx_wire_bytes = transaction.serialize_legacy().expect("Failed to serialize transaction with wire format");
+        let tx_wire_bytes = transaction
+            .serialize_legacy()
+            .expect("Failed to serialize transaction with wire format");
 
         let base64_tx = STANDARD.encode(&tx_wire_bytes);
         println!("Base64 transaction: {}", base64_tx);
@@ -404,12 +339,31 @@ mod tests {
             .expect("Failed to deserialize wire bytes into VersionedTransaction");
 
         match deserialized_vt {
-            VersionedTransaction::Legacy { signatures: deserialized_signatures, message: deserialized_legacy_message } => {
-                assert_eq!(deserialized_signatures, transaction.signatures, "Signatures mismatch after round trip");
-                assert_eq!(deserialized_legacy_message.header, transaction.message.header, "Message header mismatch");
-                assert_eq!(deserialized_legacy_message.account_keys, transaction.message.account_keys, "Account keys mismatch");
-                assert_eq!(deserialized_legacy_message.recent_blockhash, transaction.message.recent_blockhash, "Recent blockhash mismatch");
-                assert_eq!(deserialized_legacy_message.instructions, transaction.message.instructions, "Instructions mismatch");
+            VersionedTransaction::Legacy {
+                signatures: deserialized_signatures,
+                message: deserialized_legacy_message,
+            } => {
+                assert_eq!(
+                    deserialized_signatures, transaction.signatures,
+                    "Signatures mismatch after round trip"
+                );
+                assert_eq!(
+                    deserialized_legacy_message.header, transaction.message.header,
+                    "Message header mismatch"
+                );
+                assert_eq!(
+                    deserialized_legacy_message.account_keys, transaction.message.account_keys,
+                    "Account keys mismatch"
+                );
+                assert_eq!(
+                    deserialized_legacy_message.recent_blockhash,
+                    transaction.message.recent_blockhash,
+                    "Recent blockhash mismatch"
+                );
+                assert_eq!(
+                    deserialized_legacy_message.instructions, transaction.message.instructions,
+                    "Instructions mismatch"
+                );
             }
             _ => panic!("Deserialized transaction is not the expected Legacy variant"),
         }
