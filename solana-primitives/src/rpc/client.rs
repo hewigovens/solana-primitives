@@ -1,22 +1,17 @@
-//! Enhanced RPC client
-
 use crate::{
     error::Result,
-    rpc::{
-        methods::{AccountMethods, ProgramMethods, TransactionMethods},
-        types::{
-            RpcAccount, RpcAccountInfoConfig, RpcConfig, RpcKeyedAccount,
-            RpcProgramAccountsConfig, RpcSimulateTransactionResult,
-        },
-    },
+    rpc::{methods::{AccountMethods, ProgramMethods, TransactionMethods}, types::*},
     types::{Pubkey, VersionedTransaction},
 };
+use reqwest::Client;
 
-/// Enhanced RPC client for Solana
-#[derive(Debug, Clone)]
+/// A client for interacting with Solana's RPC API
 pub struct RpcClient {
+    /// The URL of the RPC endpoint
     url: String,
-    client: reqwest::Client,
+    /// The HTTP client
+    client: Client,
+    /// RPC configuration
     config: RpcConfig,
 }
 
@@ -25,7 +20,7 @@ impl RpcClient {
     pub fn new(url: String) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: Client::new(),
             config: RpcConfig::default(),
         }
     }
@@ -41,6 +36,106 @@ impl RpcClient {
         let client = client_builder.build().unwrap_or_else(|_| reqwest::Client::new());
 
         Self { url, client, config }
+    }
+
+    /// Get the latest blockhash
+    pub async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64)> {
+        let response = self
+            .client
+            .post(&self.url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getLatestBlockhash",
+                "params": [{"commitment": "confirmed"}]
+            }))
+            .send()
+            .await
+            .map_err(|e| crate::error::SolanaError::Network(e))?;
+
+        let response_text = response.text().await
+            .map_err(|e| crate::error::SolanaError::Network(e))?;
+
+        let response_json: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+
+        if let Some(error) = response_json.get("error") {
+            return Err(crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                format!("RPC error: {}", error)
+            )));
+        }
+
+        let blockhash_str = response_json["result"]["value"]["blockhash"]
+            .as_str()
+            .ok_or_else(|| {
+                crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                    "Invalid blockhash response".to_string()
+                ))
+            })?;
+
+        let last_valid_block_height = response_json["result"]["value"]["lastValidBlockHeight"]
+            .as_u64()
+            .ok_or_else(|| {
+                crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                    "Invalid lastValidBlockHeight response".to_string()
+                ))
+            })?;
+
+        let blockhash_bytes = bs58::decode(blockhash_str)
+            .into_vec()
+            .map_err(|e| crate::error::SolanaError::Serialization(e.to_string()))?;
+
+        if blockhash_bytes.len() != 32 {
+            return Err(crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                "Invalid blockhash length".to_string()
+            )));
+        }
+
+        let mut blockhash = [0u8; 32];
+        blockhash.copy_from_slice(&blockhash_bytes);
+
+        Ok((blockhash, last_valid_block_height))
+    }
+
+    /// Submit a transaction (legacy method for backward compatibility)
+    pub async fn submit_transaction(&self, transaction_bytes: &[u8]) -> Result<String> {
+        let base64_tx = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, transaction_bytes);
+
+        let response = self
+            .client
+            .post(&self.url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "sendTransaction",
+                "params": [base64_tx],
+            }))
+            .send()
+            .await
+            .map_err(|e| crate::error::SolanaError::Network(e))?;
+
+        let response_text = response.text().await
+            .map_err(|e| crate::error::SolanaError::Network(e))?;
+
+        let response_json: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+
+        if let Some(error) = response_json.get("error") {
+            return Err(crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                format!("RPC error: {}", error)
+            )));
+        }
+
+        let signature = response_json["result"]
+            .as_str()
+            .ok_or_else(|| {
+                crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
+                    "Invalid signature response".to_string()
+                ))
+            })?
+            .to_string();
+
+        Ok(signature)
     }
 
     /// Get account information
@@ -104,25 +199,6 @@ impl RpcClient {
         TransactionMethods::send_transaction(&self.client, &self.url, transaction).await
     }
 
-    /// Submit a transaction (backward compatibility alias for send_transaction)
-    pub async fn submit_transaction(&self, transaction: &[u8]) -> Result<String> {
-        // For now, this is a placeholder that calls the legacy RPC client
-        // In a full implementation, this would convert the bytes to a VersionedTransaction
-        // and call send_transaction, or implement the actual RPC call
-        use crate::jsonrpc::RpcClient as LegacyRpcClient;
-        let legacy_client = LegacyRpcClient::new(self.url.clone());
-        legacy_client.submit_transaction(transaction).await
-    }
-
-    /// Get the latest blockhash (backward compatibility method)
-    pub async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64)> {
-        // For now, this is a placeholder that calls the legacy RPC client
-        // In a full implementation, this would be implemented using the new RPC method structure
-        use crate::jsonrpc::RpcClient as LegacyRpcClient;
-        let legacy_client = LegacyRpcClient::new(self.url.clone());
-        legacy_client.get_latest_blockhash().await
-    }
-
     /// Simulate a transaction
     pub async fn simulate_transaction(
         &self,
@@ -180,18 +256,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rpc_methods_placeholder() {
+    #[ignore] // Requires network access
+    async fn test_get_latest_blockhash() {
         let client = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
-        let pubkey = Pubkey::new([1; 32]);
-
-        // These should all return not implemented errors for now
-        let result = client.get_account_info(&pubkey).await;
-        assert!(result.is_err());
-
-        let result = client.get_balance(&pubkey).await;
-        assert!(result.is_err());
-
-        let result = client.get_program_accounts(&pubkey).await;
-        assert!(result.is_err());
+        let result = client.get_latest_blockhash().await;
+        assert!(result.is_ok());
     }
 }

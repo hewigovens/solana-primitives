@@ -263,6 +263,76 @@ impl VersionedTransaction {
         self::manual_decode::decode_message(message_bytes, signatures)
     }
 
+    /// Serialize legacy transaction to bytes
+    pub fn serialize_legacy(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Legacy { signatures, message } => {
+                let mut tx_wire_bytes: Vec<u8> = Vec::new();
+
+                // 1. Number of signatures (Compact-U16 encoded)
+                let sig_len_bytes = crate::encode_length_to_compact_u16_bytes(signatures.len())?;
+                tx_wire_bytes.extend_from_slice(&sig_len_bytes);
+
+                // 2. Signatures
+                for sig_bytes_wrapper in signatures {
+                    tx_wire_bytes.extend_from_slice(sig_bytes_wrapper.as_bytes());
+                }
+
+                // 3. Serialized Message
+                let serialized_message = message.serialize_for_signing()?;
+                tx_wire_bytes.extend_from_slice(&serialized_message);
+                
+                Ok(tx_wire_bytes)
+            }
+            Self::V0 { .. } => Err("Cannot serialize V0 transaction as legacy".to_string()),
+        }
+    }
+
+    /// Serialize versioned transaction to bytes
+    pub fn serialize_versioned(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Legacy { signatures, message } => {
+                let mut tx_wire_bytes: Vec<u8> = Vec::new();
+
+                // 1. Number of signatures (Compact-U16 encoded)
+                let sig_len_bytes = crate::encode_length_to_compact_u16_bytes(signatures.len())?;
+                tx_wire_bytes.extend_from_slice(&sig_len_bytes);
+
+                // 2. Signatures
+                for sig_bytes_wrapper in signatures {
+                    tx_wire_bytes.extend_from_slice(sig_bytes_wrapper.as_bytes());
+                }
+
+                // 3. Serialized Message (legacy format)
+                let serialized_message = message.serialize_for_signing()?;
+                tx_wire_bytes.extend_from_slice(&serialized_message);
+                
+                Ok(tx_wire_bytes)
+            }
+            Self::V0 { signatures, message } => {
+                let mut tx_wire_bytes: Vec<u8> = Vec::new();
+
+                // 1. Number of signatures (Compact-U16 encoded)
+                let sig_len_bytes = crate::encode_length_to_compact_u16_bytes(signatures.len())?;
+                tx_wire_bytes.extend_from_slice(&sig_len_bytes);
+
+                // 2. Signatures
+                for sig_bytes_wrapper in signatures {
+                    tx_wire_bytes.extend_from_slice(sig_bytes_wrapper.as_bytes());
+                }
+
+                // 3. Version byte (0x80 | version)
+                tx_wire_bytes.push(0x80); // V0 version
+
+                // 4. Serialized V0 Message
+                let serialized_message = message.serialize_for_signing()?;
+                tx_wire_bytes.extend_from_slice(&serialized_message);
+                
+                Ok(tx_wire_bytes)
+            }
+        }
+    }
+
 }
 
 /// Module for manual decoding of Solana message format

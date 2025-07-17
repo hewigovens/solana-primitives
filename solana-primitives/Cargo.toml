@@ -25,6 +25,7 @@ tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 
 [features]
-default = ["jsonrpc"]
-jsonrpc = ["dep:serde_json", "dep:reqwest", "dep:tokio"]
+default = ["rpc"]
+rpc = ["dep:serde_json", "dep:reqwest", "dep:tokio"]
+jsonrpc = ["rpc"] # Alias for backward compatibility
 testing = ["dep:uuid"]

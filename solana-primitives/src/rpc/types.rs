@@ -138,8 +138,6 @@ pub struct RpcTransactionReturnData {
     pub data: (String, String),
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

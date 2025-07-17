@@ -42,7 +42,7 @@ pub enum SolanaError {
     WebSocket(String),
     
     /// Legacy RPC error for backward compatibility
-    #[cfg(feature = "jsonrpc")]
+    #[cfg(feature = "rpc")]
     #[error("RPC error: {0}")]
     RpcError(String),
 }

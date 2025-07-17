@@ -27,6 +27,47 @@ pub struct LegacyMessage {
     pub instructions: Vec<CompiledInstruction>,
 }
 
+impl LegacyMessage {
+    /// Serializes the message into the byte format required for signing
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
+        let mut m_wire_bytes: Vec<u8> = Vec::new();
+
+        // 1. Header (3 bytes)
+        m_wire_bytes.push(self.header.num_required_signatures);
+        m_wire_bytes.push(self.header.num_readonly_signed_accounts);
+        m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
+
+        // 2. Account keys
+        let account_keys_len_bytes = crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
+        m_wire_bytes.extend_from_slice(&account_keys_len_bytes);
+        for pubkey in &self.account_keys {
+            m_wire_bytes.extend_from_slice(pubkey.as_bytes()); 
+        }
+
+        // 3. Recent blockhash (32 bytes)
+        m_wire_bytes.extend_from_slice(&self.recent_blockhash);
+
+        // 4. Instructions
+        let instructions_len_bytes = crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
+        m_wire_bytes.extend_from_slice(&instructions_len_bytes);
+        for instruction_item in &self.instructions { 
+            // program_id_index (1 byte)
+            m_wire_bytes.push(instruction_item.program_id_index);
+
+            // accounts (Vec<u8>) - these are indices
+            let accounts_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
+            m_wire_bytes.extend_from_slice(&accounts_len_bytes);
+            m_wire_bytes.extend_from_slice(&instruction_item.accounts);
+
+            // data (Vec<u8>)
+            let data_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
+            m_wire_bytes.extend_from_slice(&data_len_bytes);
+            m_wire_bytes.extend_from_slice(&instruction_item.data);
+        }
+        Ok(m_wire_bytes)
+    }
+}
+
 /// Versioned message format V0
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct VersionedMessageV0 {
@@ -40,6 +81,63 @@ pub struct VersionedMessageV0 {
     pub instructions: Vec<CompiledInstruction>,
     /// List of address lookup table references
     pub address_table_lookups: Vec<MessageAddressTableLookup>,
+}
+
+impl VersionedMessageV0 {
+    /// Serializes the V0 message into the byte format required for signing
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
+        let mut m_wire_bytes: Vec<u8> = Vec::new();
+
+        // 1. Header (3 bytes)
+        m_wire_bytes.push(self.header.num_required_signatures);
+        m_wire_bytes.push(self.header.num_readonly_signed_accounts);
+        m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
+
+        // 2. Account keys
+        let account_keys_len_bytes = crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
+        m_wire_bytes.extend_from_slice(&account_keys_len_bytes);
+        for pubkey in &self.account_keys {
+            m_wire_bytes.extend_from_slice(pubkey.as_bytes()); 
+        }
+
+        // 3. Recent blockhash (32 bytes)
+        m_wire_bytes.extend_from_slice(&self.recent_blockhash);
+
+        // 4. Instructions
+        let instructions_len_bytes = crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
+        m_wire_bytes.extend_from_slice(&instructions_len_bytes);
+        for instruction_item in &self.instructions { 
+            // program_id_index (1 byte)
+            m_wire_bytes.push(instruction_item.program_id_index);
+
+            // accounts (Vec<u8>) - these are indices
+            let accounts_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
+            m_wire_bytes.extend_from_slice(&accounts_len_bytes);
+            m_wire_bytes.extend_from_slice(&instruction_item.accounts);
+
+            // data (Vec<u8>)
+            let data_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
+            m_wire_bytes.extend_from_slice(&data_len_bytes);
+            m_wire_bytes.extend_from_slice(&instruction_item.data);
+        }
+
+        // 5. Address table lookups (V0 specific)
+        m_wire_bytes.push(self.address_table_lookups.len() as u8);
+        for lookup in &self.address_table_lookups {
+            // Lookup table account key (32 bytes)
+            m_wire_bytes.extend_from_slice(lookup.account_key.as_bytes());
+            
+            // Writable indexes
+            m_wire_bytes.push(lookup.writable_indexes.len() as u8);
+            m_wire_bytes.extend_from_slice(&lookup.writable_indexes);
+            
+            // Readonly indexes
+            m_wire_bytes.push(lookup.readonly_indexes.len() as u8);
+            m_wire_bytes.extend_from_slice(&lookup.readonly_indexes);
+        }
+
+        Ok(m_wire_bytes)
+    }
 }
 
 /// Versioned message format

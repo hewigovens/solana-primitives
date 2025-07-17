@@ -2,9 +2,7 @@ pub mod builder;
 pub mod crypto;
 pub mod error;
 pub mod instructions;
-#[cfg(feature = "jsonrpc")]
-pub mod jsonrpc;
-#[cfg(feature = "jsonrpc")]
+#[cfg(feature = "rpc")]
 pub mod rpc;
 pub mod types;
 pub mod utils;
@@ -35,10 +33,8 @@ pub use utils::*;
 pub use borsh_helpers::{compact_array_to_bytes, bytes_to_compact_array};
 pub use short_vec::{ShortU16, ShortVec, encode_length_to_compact_u16_bytes, decode_compact_u16_len};
 
-// Re-export RPC clients
-#[cfg(feature = "jsonrpc")]
-pub use jsonrpc::RpcClient as LegacyRpcClient; // Keep old client for backward compatibility
-#[cfg(feature = "jsonrpc")]
+// Re-export RPC client
+#[cfg(feature = "rpc")]
 pub use rpc::RpcClient;
 
 // Re-export testing utilities

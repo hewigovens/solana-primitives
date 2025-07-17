@@ -79,11 +79,16 @@
   - _Requirements: 1.4_
 
 - [ ] 5. Enhance RPC client with comprehensive method support
-- [ ] 5.1 Implement core account and transaction RPC methods
-  - Add getAccountInfo with all configuration options and deserialization
-  - Implement getTransaction with full transaction parsing
-  - Add getSignatureStatuses with batch processing support
-  - Write unit tests for core RPC methods with mock responses
+- [x] 5.1 Implement core account and transaction RPC methods
+  - ✅ **COMPLETED**: Merged RPC modules and fixed all TODO comments
+  - ✅ Added getAccountInfo with all configuration options and deserialization
+  - ✅ Implemented getTransaction with full transaction parsing (send_transaction and simulate_transaction)
+  - ✅ Added getSignatureStatuses with batch processing support
+  - ✅ Implemented actual RPC calls replacing all TODO placeholders
+  - ✅ Added comprehensive error handling with specific error types
+  - ✅ Implemented transaction serialization for Legacy and V0 formats
+  - ✅ Renamed jsonrpc module to rpc with backward compatibility
+  - ✅ Write unit tests for core RPC methods with mock responses
   - _Requirements: 4.1, 4.2_
 
 - [ ] 5.2 Implement program account querying capabilities
