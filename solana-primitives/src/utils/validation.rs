@@ -84,7 +84,7 @@ impl TransactionValidator {
         let size = Self::calculate_transaction_size(transaction);
         if size > MAX_TRANSACTION_SIZE {
             return Err(SolanaError::Transaction(
-                format!("Transaction size {} exceeds limit of {}", size, MAX_TRANSACTION_SIZE)
+                format!("Transaction size {size} exceeds limit of {MAX_TRANSACTION_SIZE}")
             ));
         }
 

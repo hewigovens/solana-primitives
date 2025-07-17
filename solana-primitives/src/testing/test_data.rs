@@ -24,10 +24,7 @@ impl TestDataGenerator {
 
     /// Generate a random public key
     pub fn random_pubkey() -> Pubkey {
-        let mut rng = thread_rng();
-        let mut bytes = [0u8; 32];
-        rng.fill(&mut bytes);
-        Pubkey::new(bytes)
+        Self::random_keypair().pubkey()
     }
 
     /// Generate a random signature
@@ -167,6 +164,9 @@ impl TestDataGenerator {
             .collect()
     }
 
+    /// System program ID constant
+    const SYSTEM_PROGRAM_ID: &'static str = "11111111111111111111111111111111";
+
     /// Generate a simple transfer instruction for testing
     pub fn simple_transfer_instruction(
         from: Pubkey,
@@ -174,7 +174,7 @@ impl TestDataGenerator {
         amount: u64,
     ) -> Instruction {
         Instruction {
-            program_id: Pubkey::from_base58("11111111111111111111111111111111").unwrap(), // System program
+            program_id: Pubkey::from_base58(Self::SYSTEM_PROGRAM_ID).unwrap(), // System program
             accounts: vec![
                 AccountMeta {
                     pubkey: from,

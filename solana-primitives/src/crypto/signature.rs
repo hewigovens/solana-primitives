@@ -32,7 +32,7 @@ impl Signature {
     pub fn from_base58(s: &str) -> Result<Self> {
         let bytes = bs58::decode(s)
             .into_vec()
-            .map_err(|e| SolanaError::Crypto(format!("Invalid base58 signature: {}", e)))?;
+            .map_err(|e| SolanaError::Crypto(format!("Invalid base58 signature: {e}")))?;
         
         if bytes.len() != 64 {
             return Err(SolanaError::Crypto("Signature must be 64 bytes".to_string()));
@@ -56,11 +56,11 @@ impl SignatureVerifier {
     ) -> Result<bool> {
         let ed25519_signature = match Ed25519Signature::try_from(signature.as_bytes().as_slice()) {
             Ok(sig) => sig,
-            Err(e) => return Err(SolanaError::Crypto(format!("Invalid signature format: {}", e))),
+            Err(e) => return Err(SolanaError::Crypto(format!("Invalid signature format: {e}"))),
         };
         
         let verifying_key = VerifyingKey::from_bytes(public_key.as_bytes())
-            .map_err(|e| SolanaError::Crypto(format!("Invalid public key format: {}", e)))?;
+            .map_err(|e| SolanaError::Crypto(format!("Invalid public key format: {e}")))?;
 
         match verifying_key.verify(message, &ed25519_signature) {
             Ok(()) => Ok(true),

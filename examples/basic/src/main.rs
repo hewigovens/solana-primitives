@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Submit the transaction
     let signature = rpc_client.submit_transaction(&transaction_bytes).await?;
-    println!("Transaction submitted: {}", signature);
+    println!("Transaction submitted: {signature}");
 
     Ok(())
 }

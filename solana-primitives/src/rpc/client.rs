@@ -51,17 +51,17 @@ impl RpcClient {
             }))
             .send()
             .await
-            .map_err(|e| crate::error::SolanaError::Network(e))?;
+            .map_err(crate::error::SolanaError::Network)?;
 
         let response_text = response.text().await
-            .map_err(|e| crate::error::SolanaError::Network(e))?;
+            .map_err(crate::error::SolanaError::Network)?;
 
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
 
         if let Some(error) = response_json.get("error") {
             return Err(crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
 
@@ -112,17 +112,17 @@ impl RpcClient {
             }))
             .send()
             .await
-            .map_err(|e| crate::error::SolanaError::Network(e))?;
+            .map_err(crate::error::SolanaError::Network)?;
 
         let response_text = response.text().await
-            .map_err(|e| crate::error::SolanaError::Network(e))?;
+            .map_err(crate::error::SolanaError::Network)?;
 
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| crate::error::SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
 
         if let Some(error) = response_json.get("error") {
             return Err(crate::error::SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
 

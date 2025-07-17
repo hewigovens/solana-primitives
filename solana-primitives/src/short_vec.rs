@@ -206,8 +206,7 @@ where
 pub fn encode_length_to_compact_u16_bytes(len: usize) -> Result<Vec<u8>, String> {
     if len > u16::MAX as usize {
         return Err(format!(
-            "Length {} exceeds u16::MAX, cannot encode as Compact-U16",
-            len
+            "Length {len} exceeds u16::MAX, cannot encode as Compact-U16"
         ));
     }
     let mut bytes = Vec::new();

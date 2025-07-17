@@ -3,6 +3,20 @@
 use crate::types::Pubkey;
 use serde::{Deserialize, Serialize};
 
+/// Supported encoding formats for account data
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountEncoding {
+    /// Base58 encoding
+    Base58,
+    /// Base64 encoding
+    Base64,
+    /// Base64 encoding with Zstd compression
+    Base64Zstd,
+    /// JSON parsed format
+    JsonParsed,
+}
+
 /// RPC configuration options
 #[derive(Debug, Clone, Default)]
 pub struct RpcConfig {
@@ -20,7 +34,7 @@ pub struct RpcConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RpcAccountInfoConfig {
     /// Encoding format for account data
-    pub encoding: Option<String>,
+    pub encoding: Option<AccountEncoding>,
     /// Commitment level
     pub commitment: Option<String>,
     /// Data slice configuration
@@ -62,7 +76,7 @@ pub enum RpcFilterType {
         /// Bytes to match (base58 encoded)
         bytes: String,
         /// Encoding format
-        encoding: Option<String>,
+        encoding: Option<AccountEncoding>,
     },
 }
 
@@ -74,7 +88,7 @@ pub struct RpcSimulateTransactionConfig {
     /// Commitment level
     pub commitment: Option<String>,
     /// Encoding format
-    pub encoding: Option<String>,
+    pub encoding: Option<AccountEncoding>,
     /// Accounts to return
     pub accounts: Option<RpcSimulateTransactionAccountsConfig>,
     /// Minimum context slot
@@ -85,7 +99,7 @@ pub struct RpcSimulateTransactionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcSimulateTransactionAccountsConfig {
     /// Encoding format for account data
-    pub encoding: Option<String>,
+    pub encoding: Option<AccountEncoding>,
     /// Addresses to return
     pub addresses: Vec<String>,
 }
@@ -104,8 +118,8 @@ pub struct RpcKeyedAccount {
 pub struct RpcAccount {
     /// Account balance in lamports
     pub lamports: u64,
-    /// Account data
-    pub data: Vec<String>,
+    /// Account data as [0] = base64/base58-encoded account data; [1] = encoding type
+    pub data: (String, String),
     /// Account owner
     pub owner: String,
     /// Whether account is executable
@@ -154,7 +168,7 @@ mod tests {
     #[test]
     fn test_account_info_config_serialization() {
         let config = RpcAccountInfoConfig {
-            encoding: Some("base64".to_string()),
+            encoding: Some(AccountEncoding::Base64),
             commitment: Some("confirmed".to_string()),
             data_slice: Some(RpcDataSlice {
                 offset: 0,
@@ -179,10 +193,21 @@ mod tests {
         let memcmp_filter = RpcFilterType::Memcmp {
             offset: 0,
             bytes: "test".to_string(),
-            encoding: Some("base58".to_string()),
+            encoding: Some(AccountEncoding::Base58),
         };
         let json = serde_json::to_string(&memcmp_filter).unwrap();
         assert!(json.contains("offset"));
         assert!(json.contains("bytes"));
+        
+        // Test deserialization
+        let deserialized: RpcFilterType = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            RpcFilterType::Memcmp { offset, bytes, encoding } => {
+                assert_eq!(offset, 0);
+                assert_eq!(bytes, "test");
+                assert!(encoding.is_some());
+            },
+            _ => panic!("Expected Memcmp filter"),
+        }
     }
 }

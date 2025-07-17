@@ -19,8 +19,6 @@ pub enum SolanaError {
     InvalidMessage,
     #[error("Invalid transaction")]
     InvalidTransaction,
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
     
     // Enhanced error types
     #[error("RPC error: {0}")]

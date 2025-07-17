@@ -96,7 +96,7 @@ impl TransactionDebugger {
     fn inspect_compiled_instruction(instruction: &CompiledInstruction, index: usize) -> String {
         let mut output = String::new();
         
-        output.push_str(&format!("  Instruction {}:\n", index));
+        output.push_str(&format!("  Instruction {index}:\n"));
         output.push_str(&format!("    Program ID index: {}\n", instruction.program_id_index));
         output.push_str(&format!("    Account indices: {:?}\n", instruction.accounts));
         output.push_str(&format!("    Data length: {} bytes\n", instruction.data.len()));
@@ -108,7 +108,7 @@ impl TransactionDebugger {
             // Try to display as UTF-8 if possible
             if let Ok(utf8_str) = std::str::from_utf8(&instruction.data) {
                 if utf8_str.chars().all(|c| c.is_ascii() && !c.is_control()) {
-                    output.push_str(&format!("    Data (UTF-8): {}\n", utf8_str));
+                    output.push_str(&format!("    Data (UTF-8): {utf8_str}\n"));
                 }
             }
         }

@@ -52,7 +52,7 @@ impl Keypair {
     pub fn from_base58_string(s: &str) -> Result<Self> {
         let bytes = bs58::decode(s)
             .into_vec()
-            .map_err(|e| SolanaError::Crypto(format!("Invalid base58: {}", e)))?;
+            .map_err(|e| SolanaError::Crypto(format!("Invalid base58: {e}")))?;
         
         Self::from_seed(&bytes)
     }
@@ -81,7 +81,8 @@ impl Keypair {
 
 impl PartialEq for Keypair {
     fn eq(&self, other: &Self) -> bool {
-        self.public_key == other.public_key
+        // Compare both public and private keys for true equality
+        self.public_key == other.public_key && self.signing_key == other.signing_key
     }
 }
 

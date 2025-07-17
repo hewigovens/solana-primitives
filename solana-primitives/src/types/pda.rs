@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn test_find_program_address_too_many_seeds() {
         let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS + 1).map(|i| format!("seed{}", i)).collect();
+        let seed_strings: Vec<String> = (0..MAX_SEEDS + 1).map(|i| format!("seed{i}")).collect();
         let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
 
         let result = find_program_address(&program_id, &seed_refs);
@@ -197,15 +197,13 @@ mod tests {
         let program_id = create_test_program_id();
         // Try different seeds and bumps to verify we never get a point on the curve
         for i in 0..10 {
-            let seed = format!("test_seed_{}", i);
+            let seed = format!("test_seed_{i}");
             let seeds = [seed.as_bytes()];
             for bump in 0..10 {
                 if let Ok(pubkey) = create_program_address(&program_id, &seeds, bump) {
                     assert!(
                         !is_on_curve(pubkey.as_bytes()),
-                        "Found point on curve with seed {} and bump {}",
-                        i,
-                        bump
+                        "Found point on curve with seed {i} and bump {bump}"
                     );
                 }
             }

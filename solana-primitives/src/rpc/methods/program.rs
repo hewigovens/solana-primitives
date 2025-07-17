@@ -2,7 +2,7 @@
 
 use crate::{
     error::{Result, SolanaError},
-    rpc::types::{RpcKeyedAccount, RpcProgramAccountsConfig},
+    rpc::types::{RpcKeyedAccount, RpcProgramAccountsConfig, AccountEncoding},
     types::Pubkey,
 };
 
@@ -26,7 +26,10 @@ impl ProgramMethods {
                 
                 // Add account config
                 map.insert("encoding".to_string(), 
-                    serde_json::json!(cfg.account_config.encoding.unwrap_or("base64".to_string())));
+                    serde_json::json!(match &cfg.account_config.encoding {
+                        Some(encoding) => format!("{encoding:?}").to_lowercase(),
+                        None => "base64".to_string(),
+                    }));
                 
                 if let Some(commitment) = &cfg.account_config.commitment {
                     map.insert("commitment".to_string(), serde_json::json!(commitment));
@@ -42,7 +45,7 @@ impl ProgramMethods {
                 // Add filters if present
                 if let Some(filters) = cfg.filters {
                     let filters_json = serde_json::to_value(filters)
-                        .map_err(|e| SolanaError::Serialization(format!("Failed to serialize filters: {}", e)))?;
+                        .map_err(|e| SolanaError::Serialization(format!("Failed to serialize filters: {e}")))?;
                     map.insert("filters".to_string(), filters_json);
                 }
                 
@@ -67,17 +70,17 @@ impl ProgramMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -87,13 +90,13 @@ impl ProgramMethods {
             )))?;
         
         let accounts: Vec<RpcKeyedAccount> = serde_json::from_value(result.clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize program accounts: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize program accounts: {e}")))?;
         
         Ok(accounts)
     }
 
-    /// Get account info for a program
-    pub async fn get_account_info(
+    /// Get program account info
+    pub async fn get_program_account_info(
         client: &reqwest::Client,
         url: &str,
         program_id: &Pubkey,
@@ -117,7 +120,7 @@ mod tests {
 
         // Create a config with a limit
         let mut config = RpcProgramAccountsConfig::default();
-        config.account_config.encoding = Some("base64".to_string());
+        config.account_config.encoding = Some(AccountEncoding::Base64);
         
         // Add a filter for data size to limit results
         use crate::rpc::types::RpcFilterType;

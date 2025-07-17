@@ -23,7 +23,10 @@ impl AccountMethods {
         let params = match config {
             Some(cfg) => {
                 let mut map = serde_json::Map::new();
-                map.insert("encoding".to_string(), serde_json::json!(cfg.encoding.unwrap_or("base64".to_string())));
+                map.insert("encoding".to_string(), serde_json::json!(match &cfg.encoding {
+                    Some(encoding) => format!("{encoding:?}").to_lowercase(),
+                    None => "base64".to_string(),
+                }));
                 if let Some(commitment) = cfg.commitment {
                     map.insert("commitment".to_string(), serde_json::json!(commitment));
                 }
@@ -49,17 +52,17 @@ impl AccountMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -72,13 +75,13 @@ impl AccountMethods {
             return Ok(None);
         }
         
-        let value = result.get("value");
-        if value.is_none() || value.unwrap().is_null() {
+        let value = result.get("value").filter(|v| !v.is_null());
+        if value.is_none() {
             return Ok(None);
         }
         
         let account: RpcAccount = serde_json::from_value(value.unwrap().clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize account: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize account: {e}")))?;
         
         Ok(Some(account))
     }
@@ -96,7 +99,10 @@ impl AccountMethods {
         let params = match config {
             Some(cfg) => {
                 let mut map = serde_json::Map::new();
-                map.insert("encoding".to_string(), serde_json::json!(cfg.encoding.unwrap_or("base64".to_string())));
+                map.insert("encoding".to_string(), serde_json::json!(match &cfg.encoding {
+                    Some(encoding) => format!("{encoding:?}").to_lowercase(),
+                    None => "base64".to_string(),
+                }));
                 if let Some(commitment) = cfg.commitment {
                     map.insert("commitment".to_string(), serde_json::json!(commitment));
                 }
@@ -122,17 +128,17 @@ impl AccountMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -147,7 +153,7 @@ impl AccountMethods {
             )))?;
         
         let accounts: Vec<Option<RpcAccount>> = serde_json::from_value(value.clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize accounts: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize accounts: {e}")))?;
         
         Ok(accounts)
     }
@@ -172,17 +178,17 @@ impl AccountMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -197,7 +203,7 @@ impl AccountMethods {
             )))?;
         
         let balance: u64 = serde_json::from_value(value.clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize balance: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize balance: {e}")))?;
         
         Ok(balance)
     }

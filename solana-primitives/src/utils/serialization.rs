@@ -11,31 +11,31 @@ impl SerializationUtils {
     /// Serialize to Borsh format
     pub fn to_borsh<T: BorshSerialize>(data: &T) -> Result<Vec<u8>> {
         borsh::to_vec(data)
-            .map_err(|e| SolanaError::Serialization(format!("Borsh serialization failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("Borsh serialization failed: {e}")))
     }
 
     /// Deserialize from Borsh format
     pub fn from_borsh<T: BorshDeserialize>(data: &[u8]) -> Result<T> {
         T::try_from_slice(data)
-            .map_err(|e| SolanaError::Serialization(format!("Borsh deserialization failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("Borsh deserialization failed: {e}")))
     }
 
     /// Serialize to JSON format
     pub fn to_json<T: Serialize>(data: &T) -> Result<String> {
         serde_json::to_string(data)
-            .map_err(|e| SolanaError::Serialization(format!("JSON serialization failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("JSON serialization failed: {e}")))
     }
 
     /// Serialize to pretty JSON format
     pub fn to_json_pretty<T: Serialize>(data: &T) -> Result<String> {
         serde_json::to_string_pretty(data)
-            .map_err(|e| SolanaError::Serialization(format!("JSON serialization failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("JSON serialization failed: {e}")))
     }
 
     /// Deserialize from JSON format
     pub fn from_json<T: for<'de> Deserialize<'de>>(data: &str) -> Result<T> {
         serde_json::from_str(data)
-            .map_err(|e| SolanaError::Serialization(format!("JSON deserialization failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("JSON deserialization failed: {e}")))
     }
 
     /// Convert bytes to base64 string
@@ -46,7 +46,7 @@ impl SerializationUtils {
     /// Convert base64 string to bytes
     pub fn from_base64(data: &str) -> Result<Vec<u8>> {
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
-            .map_err(|e| SolanaError::Serialization(format!("Base64 decoding failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("Base64 decoding failed: {e}")))
     }
 
     /// Convert bytes to base58 string
@@ -58,7 +58,7 @@ impl SerializationUtils {
     pub fn from_base58(data: &str) -> Result<Vec<u8>> {
         bs58::decode(data)
             .into_vec()
-            .map_err(|e| SolanaError::Serialization(format!("Base58 decoding failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("Base58 decoding failed: {e}")))
     }
 
     /// Convert bytes to hex string
@@ -69,7 +69,7 @@ impl SerializationUtils {
     /// Convert hex string to bytes
     pub fn from_hex(data: &str) -> Result<Vec<u8>> {
         hex::decode(data)
-            .map_err(|e| SolanaError::Serialization(format!("Hex decoding failed: {}", e)))
+            .map_err(|e| SolanaError::Serialization(format!("Hex decoding failed: {e}")))
     }
 }
 

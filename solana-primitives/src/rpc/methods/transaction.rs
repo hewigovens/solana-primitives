@@ -10,6 +10,20 @@ use crate::{
 pub struct TransactionMethods;
 
 impl TransactionMethods {
+    /// Serialize a versioned transaction to bytes
+    fn serialize_transaction(transaction: &VersionedTransaction) -> Result<Vec<u8>> {
+        match transaction {
+            VersionedTransaction::Legacy { .. } => {
+                transaction.serialize_legacy()
+                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {e}")))
+            },
+            VersionedTransaction::V0 { .. } => {
+                transaction.serialize_versioned()
+                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {e}")))
+            },
+        }
+    }
+
     /// Send a transaction
     pub async fn send_transaction(
         client: &reqwest::Client,
@@ -17,16 +31,7 @@ impl TransactionMethods {
         transaction: &VersionedTransaction,
     ) -> Result<String> {
         // Serialize the transaction
-        let tx_bytes = match transaction {
-            VersionedTransaction::Legacy { .. } => {
-                transaction.serialize_legacy()
-                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {}", e)))?                
-            },
-            VersionedTransaction::V0 { .. } => {
-                transaction.serialize_versioned()
-                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {}", e)))?                
-            },
-        };
+        let tx_bytes = Self::serialize_transaction(transaction)?;
         
         // Encode as base64
         let tx_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &tx_bytes);
@@ -43,17 +48,17 @@ impl TransactionMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -63,7 +68,7 @@ impl TransactionMethods {
             )))?;
         
         let signature: String = serde_json::from_value(result.clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize signature: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize signature: {e}")))?;
         
         Ok(signature)
     }
@@ -75,16 +80,7 @@ impl TransactionMethods {
         transaction: &VersionedTransaction,
     ) -> Result<RpcSimulateTransactionResult> {
         // Serialize the transaction
-        let tx_bytes = match transaction {
-            VersionedTransaction::Legacy { .. } => {
-                transaction.serialize_legacy()
-                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {}", e)))?                
-            },
-            VersionedTransaction::V0 { .. } => {
-                transaction.serialize_versioned()
-                    .map_err(|e| SolanaError::Serialization(format!("Failed to serialize transaction: {}", e)))?                
-            },
-        };
+        let tx_bytes = Self::serialize_transaction(transaction)?;
         
         // Encode as base64
         let tx_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &tx_bytes);
@@ -101,17 +97,17 @@ impl TransactionMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
@@ -126,7 +122,7 @@ impl TransactionMethods {
             )))?;
         
         let simulation_result: RpcSimulateTransactionResult = serde_json::from_value(value.clone())
-            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize simulation result: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to deserialize simulation result: {e}")))?;
         
         Ok(simulation_result)
     }
@@ -149,17 +145,17 @@ impl TransactionMethods {
             .json(&request)
             .send()
             .await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_text = response.text().await
-            .map_err(|e| SolanaError::Network(e))?;
+            .map_err(SolanaError::Network)?;
         
         let response_json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {}", e)))?;
+            .map_err(|e| SolanaError::Serialization(format!("Failed to parse JSON response: {e}")))?;
         
         if let Some(error) = response_json.get("error") {
             return Err(SolanaError::Rpc(crate::error::RpcError::InvalidRequest(
-                format!("RPC error: {}", error)
+                format!("RPC error: {error}")
             )));
         }
         
