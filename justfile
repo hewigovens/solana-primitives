@@ -1,4 +1,7 @@
 lint:
+    cargo clippy
+
+lint-fix:
     cargo clippy --fix --allow-dirty --allow-staged
 
 test:
