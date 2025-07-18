@@ -92,12 +92,10 @@ impl TransactionBuilder {
                 } else {
                     readonly_signers.push(*pubkey);
                 }
+            } else if meta.is_writable {
+                writable_non_signers.push(*pubkey);
             } else {
-                if meta.is_writable {
-                    writable_non_signers.push(*pubkey);
-                } else {
-                    readonly_non_signers.push(*pubkey);
-                }
+                readonly_non_signers.push(*pubkey);
             }
         }
 
@@ -391,13 +389,13 @@ mod tests {
         tx_builder.add_instruction(instruction.build());
 
         let transaction = tx_builder.build().unwrap(); 
-        println!("Transaction: {:#?}", transaction);
+        println!("Transaction: {transaction:#?}");
 
         // Use the new method on Transaction to serialize
         let tx_wire_bytes = transaction.serialize_legacy().expect("Failed to serialize transaction with wire format");
 
         let base64_tx = STANDARD.encode(&tx_wire_bytes);
-        println!("Base64 transaction: {}", base64_tx);
+        println!("Base64 transaction: {base64_tx}");
 
         // Deserialize and verify
         let deserialized_vt = VersionedTransaction::deserialize_with_version(&tx_wire_bytes)
