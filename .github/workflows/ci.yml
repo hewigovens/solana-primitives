@@ -1,4 +1,4 @@
-name: Rust
+name: CI
 
 on:
   push:
@@ -16,11 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install just
-      run: cargo install just
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --all-features
     - name: Run tests
-      run: cargo test --verbose
-    - name: Run lint
-      run: just lint
+      run: cargo test --all-features

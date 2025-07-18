@@ -1,6 +1,6 @@
 # Solana Primitives
 
-[![Rust](https://github.com/hewigovens/solana-primitives/actions/workflows/rust.yml/badge.svg)](https://github.com/hewigovens/solana-primitives/actions/workflows/rust.yml)
+[![CI](https://github.com/hewigovens/solana-primitives/actions/workflows/ci.yml/badge.svg)](https://github.com/hewigovens/solana-primitives/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/solana-primitives.svg)](https://crates.io/crates/solana-primitives)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hewigovens/solana-primitives)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
