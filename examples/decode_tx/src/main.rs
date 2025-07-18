@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             print_versioned_transaction(&decoded_tx);
         }
         Err(e) => {
-            println!("❌ Failed to decode transaction: {}", e);
+            println!("❌ Failed to decode transaction: {e}");
         }
     }
 

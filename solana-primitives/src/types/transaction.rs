@@ -300,7 +300,7 @@ mod manual_decode {
             if version == 0 {
                 decode_v0_message(&bytes[1..], signatures)
             } else {
-                Err(format!("Unsupported message version: {}", version).into())
+                Err(format!("Unsupported message version: {version}").into())
             }
         } else {
             // Legacy message (no version byte)
@@ -342,7 +342,7 @@ mod manual_decode {
         if offset >= bytes.len() {
             return Err("Message too short: no account count".into());
         }
-        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
         offset += len_bytes_consumed;
 
         if offset + (account_count * 32) > bytes.len() {
@@ -369,7 +369,7 @@ mod manual_decode {
         if offset >= bytes.len() {
             return Err("Message too short: no instruction count".into());
         }
-        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
         offset += len_bytes_consumed;
 
         let mut instructions = Vec::with_capacity(instruction_count);
@@ -387,7 +387,7 @@ mod manual_decode {
             }
 
             // Account indices (compact-u16 length, then count bytes)
-            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
             offset += len_bytes_consumed;
 
             if offset + account_indices_count > bytes.len() {
@@ -403,7 +403,7 @@ mod manual_decode {
             }
 
             // Instruction data (compact-u16 length, then length bytes)
-            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
             offset += len_bytes_consumed;
 
             if offset + data_length > bytes.len() {
@@ -454,7 +454,7 @@ mod manual_decode {
         if offset >= bytes.len() {
             return Err("Message too short: no account count".into());
         }
-        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
         offset += len_bytes_consumed;
 
         if offset + (account_count * 32) > bytes.len() {
@@ -481,7 +481,7 @@ mod manual_decode {
         if offset >= bytes.len() {
             return Err("Message too short: no instruction count".into());
         }
-        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
         offset += len_bytes_consumed;
 
         let mut instructions = Vec::with_capacity(instruction_count);
@@ -499,7 +499,7 @@ mod manual_decode {
             }
 
             // Account indices (compact-u16 length, then count bytes)
-            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
             offset += len_bytes_consumed;
 
             if offset + account_indices_count > bytes.len() {
@@ -515,7 +515,7 @@ mod manual_decode {
             }
 
             // Instruction data (compact-u16 length, then length bytes)
-            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(|e_str| Box::<dyn std::error::Error>::from(e_str))?;
+            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
             offset += len_bytes_consumed;
 
             if offset + data_length > bytes.len() {
