@@ -10,31 +10,17 @@ pub enum ComputeBudgetInstruction {
         /// Additional compute unit fee to pay
         additional_fee: u32,
     },
-    /// Set a specific compute unit limit for a single instruction
-    /// (deprecated)
-    RequestUnitDeprecated {
-        /// Units to request
-        units: u32,
-    },
-    /// Request a specific transaction-wide compute unit price
-    /// (deprecated)
-    SetComputeUnitPriceDeprecated {
-        /// Compute unit price to request
-        micro_lamports: u32,
-    },
     /// Request a specific transaction-wide compute unit limit
     RequestHeapFrame {
         /// Stack size in bytes
         bytes: u32,
     },
     /// Request a specific transaction-wide compute unit price
-    /// This replaces the deprecated SetComputeUnitPrice
     SetComputeUnitPrice {
         /// Compute unit price to request (in increments of 0.000001 lamports per compute unit)
         micro_lamports: u64,
     },
     /// Request a specific transaction-wide compute unit limit
-    /// This replaces the deprecated RequestUnits
     SetComputeUnitLimit {
         /// Units to request
         units: u32,
@@ -54,24 +40,16 @@ impl ComputeBudgetInstruction {
                 data.extend_from_slice(&units.to_le_bytes());
                 data.extend_from_slice(&additional_fee.to_le_bytes());
             }
-            Self::RequestUnitDeprecated { units } => {
-                data.push(1);
-                data.extend_from_slice(&units.to_le_bytes());
-            }
-            Self::SetComputeUnitPriceDeprecated { micro_lamports } => {
-                data.push(2);
-                data.extend_from_slice(&micro_lamports.to_le_bytes());
-            }
             Self::RequestHeapFrame { bytes } => {
-                data.push(3);
+                data.push(1);
                 data.extend_from_slice(&bytes.to_le_bytes());
             }
             Self::SetComputeUnitPrice { micro_lamports } => {
-                data.push(4);
+                data.push(2);
                 data.extend_from_slice(&micro_lamports.to_le_bytes());
             }
             Self::SetComputeUnitLimit { units } => {
-                data.push(5);
+                data.push(3);
                 data.extend_from_slice(&units.to_le_bytes());
             }
         }
