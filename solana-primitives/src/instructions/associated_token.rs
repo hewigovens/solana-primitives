@@ -70,13 +70,13 @@ pub fn get_associated_token_address(
 ) -> Pubkey {
     let token_program_id = Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap();
     let associated_token_program_id = Pubkey::from_base58(ASSOCIATED_TOKEN_PROGRAM_ID).unwrap();
-    
+
     let seeds: [&[u8]; 3] = [
         wallet_address.as_bytes(),
         token_program_id.as_bytes(),
         token_mint_address.as_bytes(),
     ];
-    
+
     find_program_address(&associated_token_program_id, &seeds)
         .expect("Failed to derive associated token address")
         .0

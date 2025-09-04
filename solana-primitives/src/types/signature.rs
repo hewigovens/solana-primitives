@@ -20,11 +20,14 @@ impl SignatureBytes {
 
     /// Create a signature from a base58 string
     pub fn from_base58(s: &str) -> Result<Self> {
-        let bytes = bs58::decode(s)
-            .into_vec()
-            .map_err(|_| SolanaError::InvalidSignature)?;
+        let bytes = bs58::decode(s).into_vec().map_err(|_| {
+            SolanaError::InvalidSignature(format!("failed to decode base58: {}", s))
+        })?;
         if bytes.len() != 64 {
-            return Err(SolanaError::InvalidSignature);
+            return Err(SolanaError::InvalidSignature(format!(
+                "invalid length: {}, expected: 64",
+                bytes.len()
+            )));
         }
         let mut result = [0; 64];
         result.copy_from_slice(&bytes);

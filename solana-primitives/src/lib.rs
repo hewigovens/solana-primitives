@@ -1,20 +1,17 @@
+pub mod borsh_helpers;
 pub mod builder;
 pub mod crypto;
 pub mod error;
 pub mod instructions;
-#[cfg(feature = "jsonrpc")]
-pub mod jsonrpc;
-pub mod types;
-pub mod borsh_helpers;
 pub mod short_vec;
+pub mod types;
 
-pub use builder::{InstructionBuilder, TransactionBuilder};
+pub use borsh_helpers::{bytes_to_compact_array, compact_array_to_bytes};
+pub use builder::{InstructionBuilder, InstructionDataBuilder, TransactionBuilder};
 pub use crypto::*;
 pub use error::{Result, SolanaError};
 pub use instructions::*;
+pub use short_vec::{
+    decode_compact_u16_len, encode_length_to_compact_u16_bytes, ShortU16, ShortVec,
+};
 pub use types::*;
-pub use borsh_helpers::{compact_array_to_bytes, bytes_to_compact_array};
-pub use short_vec::{ShortU16, ShortVec, encode_length_to_compact_u16_bytes, decode_compact_u16_len};
-
-#[cfg(feature = "jsonrpc")]
-pub use jsonrpc::RpcClient;

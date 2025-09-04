@@ -1,5 +1,5 @@
 // Compact serde-encoding of vectors with small length.
-use borsh::{BorshSerialize, BorshDeserialize};
+use borsh::{BorshDeserialize, BorshSerialize};
 
 use serde::{
     de::{self, Deserializer, SeqAccess, Visitor},
@@ -240,19 +240,20 @@ pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), &'static s
         let current_byte = bytes[size_of_len_encoding];
         len |= (current_byte as usize & 0x7F) << (size_of_len_encoding * 7);
         size_of_len_encoding += 1;
-        if (current_byte & 0x80) == 0 { // MSB is 0, this is the last byte for the length
+        if (current_byte & 0x80) == 0 {
+            // MSB is 0, this is the last byte for the length
             break;
         }
         // According to Solana's short_vec.rs, max 3 bytes for u16 values (up to 65535)
         // 1 byte for 0-127
         // 2 bytes for 128 - 16383
         // 3 bytes for 16384 - 2097151 (but u16::MAX is 65535, so it's 16384 - 65535)
-        if size_of_len_encoding >= 3 && (current_byte & 0x80) != 0 { 
+        if size_of_len_encoding >= 3 && (current_byte & 0x80) != 0 {
             // If we've read 3 bytes and the 3rd byte still has MSB set, it's an invalid encoding for u16.
             // Or if we are about to read a 4th byte for a u16 value.
             // This check is to prevent overruns for u16. If len can be > u16::MAX, this check changes.
             // For typical Solana message elements, lengths are expected to fit u16.
-             return Err("Compact u16 length encoding too long (max 3 bytes for u16 values)");
+            return Err("Compact u16 length encoding too long (max 3 bytes for u16 values)");
         }
     }
     // Final check: if the decoded length requires more than a u16, it's an error
@@ -303,7 +304,9 @@ where
         D: Deserializer<'de>,
     {
         // Calls the module-level deserialize function
-        Ok(ShortVec { inner: self::deserialize(deserializer)? })
+        Ok(ShortVec {
+            inner: self::deserialize(deserializer)?,
+        })
     }
 }
 
@@ -316,7 +319,9 @@ pub struct ShortVec<T> {
 // We need to be careful with bounds if T itself is complex.
 impl<T: Clone> Clone for ShortVec<T> {
     fn clone(&self) -> Self {
-        ShortVec { inner: self.inner.clone() }
+        ShortVec {
+            inner: self.inner.clone(),
+        }
     }
 }
 

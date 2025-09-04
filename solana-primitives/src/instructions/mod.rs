@@ -7,6 +7,8 @@ pub mod token;
 
 // Program IDs
 pub mod program_ids {
+    use crate::types::Pubkey;
+
     /// System program ID
     pub const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
 
@@ -27,7 +29,39 @@ pub mod program_ids {
 
     /// Compute Budget program ID
     pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget111111111111111111111111111111";
-}
 
-// Re-export commonly used types
-pub use crate::types::{AccountMeta, Instruction, Pubkey};
+    /// Helper function to get System program Pubkey
+    pub fn system_program() -> Pubkey {
+        Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Token program Pubkey
+    pub fn token_program() -> Pubkey {
+        Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Token 2022 program Pubkey
+    pub fn token_2022_program() -> Pubkey {
+        Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Associated Token program Pubkey
+    pub fn associated_token_program() -> Pubkey {
+        Pubkey::from_base58(ASSOCIATED_TOKEN_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Memo program Pubkey
+    pub fn memo_program() -> Pubkey {
+        Pubkey::from_base58(MEMO_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get BPF Loader program Pubkey
+    pub fn bpf_loader_program() -> Pubkey {
+        Pubkey::from_base58(BPF_LOADER_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Compute Budget program Pubkey
+    pub fn compute_budget_program() -> Pubkey {
+        Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap()
+    }
+}

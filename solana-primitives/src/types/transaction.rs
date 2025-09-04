@@ -1,7 +1,10 @@
+use crate::crypto::sign_message;
+use crate::error::SolanaError;
 use crate::types::{
     CompiledInstruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey, SignatureBytes,
-    VersionedMessage, VersionedMessageV0,
+    VersionedMessage, VersionedMessageV0, MAX_TRANSACTION_SIZE,
 };
+use crate::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
@@ -59,31 +62,38 @@ impl Transaction {
     }
 
     /// Deserialize a transaction from bytes
-    pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
-            return Err("Empty transaction data".into());
+            return Err(SolanaError::DeserializationError(
+                "Empty transaction data".to_string(),
+            ));
         }
 
-        // First byte is the signature count
-        let num_signatures = bytes[0] as usize;
+        // Signature count is shortvec-encoded
+        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
+            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
 
         // Check if there are enough bytes for signatures
-        if bytes.len() < 1 + (num_signatures * 64) {
-            return Err("Not enough bytes for signatures".into());
+        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
+            return Err(SolanaError::DeserializationError(
+                "Not enough bytes for signatures".to_string(),
+            ));
         }
 
         // Extract signatures
         let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = 1; // Skip signature count byte
+        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
 
         for _ in 0..num_signatures {
             if offset + 64 > bytes.len() {
-                return Err("Invalid signature data".into());
+                return Err(SolanaError::DeserializationError(
+                    "Invalid signature data".to_string(),
+                ));
             }
 
-            let sig_bytes: [u8; 64] = bytes[offset..offset + 64]
-                .try_into()
-                .map_err(|_| "Failed to convert signature bytes")?;
+            let sig_bytes: [u8; 64] = bytes[offset..offset + 64].try_into().map_err(|_| {
+                SolanaError::DeserializationError("Failed to convert signature bytes".to_string())
+            })?;
 
             signatures.push(SignatureBytes::new(sig_bytes));
             offset += 64;
@@ -108,12 +118,14 @@ impl Transaction {
                     message: regular_message,
                 })
             }
-            _ => Err("Failed to decode legacy message for Transaction".into()),
+            _ => Err(SolanaError::DeserializationError(
+                "Failed to decode legacy message for Transaction".to_string(),
+            )),
         }
     }
 
     /// Serializes the full transaction into the Solana legacy wire format.
-    pub fn serialize_legacy(&self) -> Result<Vec<u8>, String> {
+    pub fn serialize_legacy(&self) -> Result<Vec<u8>> {
         let mut tx_wire_bytes: Vec<u8> = Vec::new();
 
         // 1. Number of signatures (Compact-U16 encoded)
@@ -126,13 +138,123 @@ impl Transaction {
         }
 
         // 3. Serialized Message
-        // The `serialize_for_signing` method in `Message` already returns Result<Vec<u8>, String>
-        let serialized_message = self.message.serialize_for_signing()?; // Propagate error if any
+        // The `serialize_for_signing` method in `Message` returns Result<Vec<u8>, String>
+        let serialized_message = self
+            .message
+            .serialize_for_signing()
+            .map_err(SolanaError::SerializationError)?;
         tx_wire_bytes.extend_from_slice(&serialized_message);
-        
+
         Ok(tx_wire_bytes)
     }
 
+    /// Sign the transaction with one or more private keys
+    /// The private keys must correspond to the signing accounts in the same order
+    pub fn sign(&mut self, private_keys: &[&[u8]]) -> Result<()> {
+        // Get message bytes for signing
+        let message_bytes = self
+            .message
+            .serialize_for_signing()
+            .map_err(SolanaError::SerializationError)?;
+
+        // Clear existing signatures
+        self.signatures.clear();
+
+        // Get number of required signatures
+        let num_required_sigs = self.message.header.num_required_signatures as usize;
+
+        // Validate we have enough private keys
+        if private_keys.len() < num_required_sigs {
+            return Err(SolanaError::InvalidSignature(format!(
+                "insufficient private keys: {}, required: {}",
+                private_keys.len(),
+                num_required_sigs
+            )));
+        }
+
+        // Sign with each private key
+        for private_key in private_keys.iter().take(num_required_sigs) {
+            let signature = sign_message(private_key, &message_bytes)?;
+            self.signatures.push(signature);
+        }
+
+        Ok(())
+    }
+
+    /// Partially sign the transaction with specific private keys
+    /// Updates only the signatures for the provided keys based on their public key positions
+    pub fn partial_sign(&mut self, private_keys: &[&[u8]], public_keys: &[Pubkey]) -> Result<()> {
+        if private_keys.len() != public_keys.len() {
+            return Err(SolanaError::InvalidSignature(format!(
+                "private keys count ({}) does not match public keys count ({})",
+                private_keys.len(),
+                public_keys.len()
+            )));
+        }
+
+        // Get message bytes for signing
+        let message_bytes = self
+            .message
+            .serialize_for_signing()
+            .map_err(SolanaError::SerializationError)?;
+
+        // Ensure we have enough signature slots
+        let num_required_sigs = self.message.header.num_required_signatures as usize;
+        if self.signatures.len() < num_required_sigs {
+            self.signatures
+                .resize(num_required_sigs, SignatureBytes::new([0u8; 64]));
+        }
+
+        // Sign with each private key and place signature at correct index
+        for (private_key, public_key) in private_keys.iter().zip(public_keys.iter()) {
+            // Find the index of this public key in account_keys
+            if let Some(index) = self
+                .message
+                .account_keys
+                .iter()
+                .position(|k| k == public_key)
+            {
+                if index < num_required_sigs {
+                    let signature = sign_message(private_key, &message_bytes)?;
+                    self.signatures[index] = signature;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if the transaction has been signed by all required signers
+    pub fn is_signed(&self) -> bool {
+        let num_required = self.message.header.num_required_signatures as usize;
+        if self.signatures.len() < num_required {
+            return false;
+        }
+
+        // Check that none of the required signatures are empty
+        for i in 0..num_required {
+            if self.signatures[i].as_bytes().iter().all(|&b| b == 0) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Validate transaction size is within limits (1232 bytes)
+    pub fn validate_size(&self) -> Result<()> {
+        let serialized = self.serialize_legacy()?;
+
+        if serialized.len() > MAX_TRANSACTION_SIZE {
+            return Err(SolanaError::SerializationError(format!(
+                "Transaction size {} exceeds maximum of {} bytes",
+                serialized.len(),
+                MAX_TRANSACTION_SIZE
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 /// Versioned transaction format
@@ -226,31 +348,38 @@ impl VersionedTransaction {
     }
 
     /// Deserialize a versioned transaction from bytes
-    pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
-            return Err("Empty transaction data".into());
+            return Err(SolanaError::DeserializationError(
+                "Empty transaction data".to_string(),
+            ));
         }
 
-        // First byte is the signature count
-        let num_signatures = bytes[0] as usize;
+        // Signature count is shortvec-encoded
+        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
+            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
 
         // Check if there are enough bytes for signatures
-        if bytes.len() < 1 + (num_signatures * 64) {
-            return Err("Not enough bytes for signatures".into());
+        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
+            return Err(SolanaError::DeserializationError(
+                "Not enough bytes for signatures".to_string(),
+            ));
         }
 
         // Extract signatures
         let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = 1; // Skip signature count byte
+        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
 
         for _ in 0..num_signatures {
             if offset + 64 > bytes.len() {
-                return Err("Invalid signature data".into());
+                return Err(SolanaError::DeserializationError(
+                    "Invalid signature data".to_string(),
+                ));
             }
 
-            let sig_bytes: [u8; 64] = bytes[offset..offset + 64]
-                .try_into()
-                .map_err(|_| "Failed to convert signature bytes")?;
+            let sig_bytes: [u8; 64] = bytes[offset..offset + 64].try_into().map_err(|_| {
+                SolanaError::DeserializationError("Failed to convert signature bytes".to_string())
+            })?;
 
             signatures.push(SignatureBytes::new(sig_bytes));
             offset += 64;
@@ -262,14 +391,12 @@ impl VersionedTransaction {
         // Manually decode the message
         self::manual_decode::decode_message(message_bytes, signatures)
     }
-
 }
 
 /// Module for manual decoding of Solana message format
 mod manual_decode {
     use super::*;
     use crate::types::MessageHeader;
-
 
     /// Decode a message based on the Solana binary format
     /// The format is:
@@ -284,9 +411,11 @@ mod manual_decode {
     pub fn decode_message(
         bytes: &[u8],
         signatures: Vec<SignatureBytes>,
-    ) -> Result<VersionedTransaction, Box<dyn std::error::Error>> {
+    ) -> Result<VersionedTransaction> {
         if bytes.len() < 3 {
-            return Err("Message bytes too short, need at least 3 bytes for header".into());
+            return Err(SolanaError::DeserializationError(
+                "Message bytes too short, need at least 3 bytes for header".to_string(),
+            ));
         }
 
         // Check if this is a versioned message (first bit set)
@@ -300,7 +429,9 @@ mod manual_decode {
             if version == 0 {
                 decode_v0_message(&bytes[1..], signatures)
             } else {
-                Err(format!("Unsupported message version: {version}").into())
+                Err(SolanaError::DeserializationError(format!(
+                    "Unsupported message version: {version}"
+                )))
             }
         } else {
             // Legacy message (no version byte)
@@ -324,9 +455,11 @@ mod manual_decode {
     pub fn decode_legacy_message(
         bytes: &[u8],
         signatures: Vec<SignatureBytes>,
-    ) -> Result<VersionedTransaction, Box<dyn std::error::Error>> {
+    ) -> Result<VersionedTransaction> {
         if bytes.len() < 3 {
-            return Err("Legacy message too short".into());
+            return Err(SolanaError::DeserializationError(
+                "Legacy message too short".to_string(),
+            ));
         }
 
         // Header: 3 bytes
@@ -340,13 +473,18 @@ mod manual_decode {
 
         // Account keys
         if offset >= bytes.len() {
-            return Err("Message too short: no account count".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no account count".to_string(),
+            ));
         }
-        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+        let (account_count, len_bytes_consumed) =
+            crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
         offset += len_bytes_consumed;
 
         if offset + (account_count * 32) > bytes.len() {
-            return Err("Message too short: not enough bytes for accounts".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: not enough bytes for accounts".to_string(),
+            ));
         }
 
         let mut account_keys = Vec::with_capacity(account_count);
@@ -359,7 +497,9 @@ mod manual_decode {
 
         // Recent blockhash (always 32 bytes)
         if offset + 32 > bytes.len() {
-            return Err("Message too short: no recent blockhash".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no recent blockhash".to_string(),
+            ));
         }
         let mut recent_blockhash = [0u8; 32];
         recent_blockhash.copy_from_slice(&bytes[offset..offset + 32]);
@@ -367,15 +507,20 @@ mod manual_decode {
 
         // Instructions
         if offset >= bytes.len() {
-            return Err("Message too short: no instruction count".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no instruction count".to_string(),
+            ));
         }
-        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+        let (instruction_count, len_bytes_consumed) =
+            crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
         offset += len_bytes_consumed;
 
         let mut instructions = Vec::with_capacity(instruction_count);
         for _ in 0..instruction_count {
             if offset >= bytes.len() {
-                return Err("Message too short: incomplete instruction".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: incomplete instruction".to_string(),
+                ));
             }
 
             // Program ID index (1 byte)
@@ -383,15 +528,20 @@ mod manual_decode {
             offset += 1;
 
             if offset >= bytes.len() {
-                return Err("Message too short: no account indices count".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: no account indices count".to_string(),
+                ));
             }
 
             // Account indices (compact-u16 length, then count bytes)
-            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+            let (account_indices_count, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
             offset += len_bytes_consumed;
 
             if offset + account_indices_count > bytes.len() {
-                return Err("Message too short: not enough account indices".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: not enough account indices".to_string(),
+                ));
             }
 
             let accounts = bytes[offset..offset + account_indices_count].to_vec();
@@ -399,15 +549,20 @@ mod manual_decode {
 
             if offset >= bytes.len() {
                 // This check ensures there's at least one byte for the length itself.
-                return Err("Message too short: no instruction data length".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: no instruction data length".to_string(),
+                ));
             }
 
             // Instruction data (compact-u16 length, then length bytes)
-            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+            let (data_length, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
             offset += len_bytes_consumed;
 
             if offset + data_length > bytes.len() {
-                return Err("Message too short: not enough instruction data".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: not enough instruction data".to_string(),
+                ));
             }
 
             let data = bytes[offset..offset + data_length].to_vec();
@@ -436,9 +591,11 @@ mod manual_decode {
     pub fn decode_v0_message(
         bytes: &[u8],
         signatures: Vec<SignatureBytes>,
-    ) -> Result<VersionedTransaction, Box<dyn std::error::Error>> {
+    ) -> Result<VersionedTransaction> {
         if bytes.len() < 3 {
-            return Err("V0 message too short".into());
+            return Err(SolanaError::DeserializationError(
+                "V0 message too short".to_string(),
+            ));
         }
 
         // Header: 3 bytes
@@ -452,13 +609,18 @@ mod manual_decode {
 
         // Account keys
         if offset >= bytes.len() {
-            return Err("Message too short: no account count".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no account count".to_string(),
+            ));
         }
-        let (account_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+        let (account_count, len_bytes_consumed) =
+            crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
         offset += len_bytes_consumed;
 
         if offset + (account_count * 32) > bytes.len() {
-            return Err("Message too short: not enough bytes for accounts".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: not enough bytes for accounts".to_string(),
+            ));
         }
 
         let mut account_keys = Vec::with_capacity(account_count);
@@ -471,7 +633,9 @@ mod manual_decode {
 
         // Recent blockhash (always 32 bytes)
         if offset + 32 > bytes.len() {
-            return Err("Message too short: no recent blockhash".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no recent blockhash".to_string(),
+            ));
         }
         let mut recent_blockhash = [0u8; 32];
         recent_blockhash.copy_from_slice(&bytes[offset..offset + 32]);
@@ -479,15 +643,20 @@ mod manual_decode {
 
         // Instructions
         if offset >= bytes.len() {
-            return Err("Message too short: no instruction count".into());
+            return Err(SolanaError::DeserializationError(
+                "Message too short: no instruction count".to_string(),
+            ));
         }
-        let (instruction_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+        let (instruction_count, len_bytes_consumed) =
+            crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
         offset += len_bytes_consumed;
 
         let mut instructions = Vec::with_capacity(instruction_count);
         for _ in 0..instruction_count {
             if offset >= bytes.len() {
-                return Err("Message too short: incomplete instruction".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: incomplete instruction".to_string(),
+                ));
             }
 
             // Program ID index (1 byte)
@@ -495,15 +664,20 @@ mod manual_decode {
             offset += 1;
 
             if offset >= bytes.len() {
-                return Err("Message too short: no account indices count".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: no account indices count".to_string(),
+                ));
             }
 
             // Account indices (compact-u16 length, then count bytes)
-            let (account_indices_count, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+            let (account_indices_count, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
             offset += len_bytes_consumed;
 
             if offset + account_indices_count > bytes.len() {
-                return Err("Message too short: not enough account indices".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: not enough account indices".to_string(),
+                ));
             }
 
             let accounts = bytes[offset..offset + account_indices_count].to_vec();
@@ -511,15 +685,20 @@ mod manual_decode {
 
             if offset >= bytes.len() {
                 // This check ensures there's at least one byte for the length itself.
-                return Err("Message too short: no instruction data length".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: no instruction data length".to_string(),
+                ));
             }
 
             // Instruction data (compact-u16 length, then length bytes)
-            let (data_length, len_bytes_consumed) = crate::decode_compact_u16_len(&bytes[offset..]).map_err(Box::<dyn std::error::Error>::from)?;
+            let (data_length, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..]).map_err(SolanaError::from)?;
             offset += len_bytes_consumed;
 
             if offset + data_length > bytes.len() {
-                return Err("Message too short: not enough instruction data".into());
+                return Err(SolanaError::DeserializationError(
+                    "Message too short: not enough instruction data".to_string(),
+                ));
             }
 
             let data = bytes[offset..offset + data_length].to_vec();
@@ -537,12 +716,16 @@ mod manual_decode {
 
         // Check if we have more data (for address table lookups)
         if offset < bytes.len() {
-            let lookup_table_count = bytes[offset] as usize;
-            offset += 1;
+            let (lookup_table_count, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..])
+                    .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+            offset += len_bytes_consumed;
 
             for _ in 0..lookup_table_count {
                 if offset + 32 > bytes.len() {
-                    return Err("Message too short: incomplete address lookup table".into());
+                    return Err(SolanaError::DeserializationError(
+                        "Message too short: incomplete address lookup table".to_string(),
+                    ));
                 }
 
                 // Lookup table account key
@@ -553,13 +736,19 @@ mod manual_decode {
 
                 // Writable indexes
                 if offset >= bytes.len() {
-                    return Err("Message too short: no writable indexes count".into());
+                    return Err(SolanaError::DeserializationError(
+                        "Message too short: no writable indexes count".to_string(),
+                    ));
                 }
-                let writable_indexes_count = bytes[offset] as usize;
-                offset += 1;
+                let (writable_indexes_count, len_bytes_consumed) =
+                    crate::decode_compact_u16_len(&bytes[offset..])
+                        .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+                offset += len_bytes_consumed;
 
                 if offset + writable_indexes_count > bytes.len() {
-                    return Err("Message too short: not enough writable indexes".into());
+                    return Err(SolanaError::DeserializationError(
+                        "Message too short: not enough writable indexes".to_string(),
+                    ));
                 }
 
                 let writable_indexes = bytes[offset..offset + writable_indexes_count].to_vec();
@@ -567,13 +756,19 @@ mod manual_decode {
 
                 // Readonly indexes
                 if offset >= bytes.len() {
-                    return Err("Message too short: no readonly indexes count".into());
+                    return Err(SolanaError::DeserializationError(
+                        "Message too short: no readonly indexes count".to_string(),
+                    ));
                 }
-                let readonly_indexes_count = bytes[offset] as usize;
-                offset += 1;
+                let (readonly_indexes_count, len_bytes_consumed) =
+                    crate::decode_compact_u16_len(&bytes[offset..])
+                        .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+                offset += len_bytes_consumed;
 
                 if offset + readonly_indexes_count > bytes.len() {
-                    return Err("Message too short: not enough readonly indexes".into());
+                    return Err(SolanaError::DeserializationError(
+                        "Message too short: not enough readonly indexes".to_string(),
+                    ));
                 }
 
                 let readonly_indexes = bytes[offset..offset + readonly_indexes_count].to_vec();
@@ -682,5 +877,4 @@ mod tests {
             _ => panic!("Expected V0 transaction"),
         }
     }
-
 }
