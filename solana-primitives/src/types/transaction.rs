@@ -2,7 +2,7 @@ use crate::crypto::sign_message;
 use crate::error::SolanaError;
 use crate::types::{
     CompiledInstruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey, SignatureBytes,
-    VersionedMessage, VersionedMessageV0,
+    VersionedMessage, VersionedMessageV0, MAX_TRANSACTION_SIZE,
 };
 use crate::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -69,11 +69,12 @@ impl Transaction {
             ));
         }
 
-        // First byte is the signature count
-        let num_signatures = bytes[0] as usize;
+        // Signature count is shortvec-encoded
+        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
+            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
 
         // Check if there are enough bytes for signatures
-        if bytes.len() < 1 + (num_signatures * 64) {
+        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
             return Err(SolanaError::DeserializationError(
                 "Not enough bytes for signatures".to_string(),
             ));
@@ -81,7 +82,7 @@ impl Transaction {
 
         // Extract signatures
         let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = 1; // Skip signature count byte
+        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
 
         for _ in 0..num_signatures {
             if offset + 64 > bytes.len() {
@@ -242,8 +243,6 @@ impl Transaction {
 
     /// Validate transaction size is within limits (1232 bytes)
     pub fn validate_size(&self) -> Result<()> {
-        use crate::types::MAX_TRANSACTION_SIZE;
-
         let serialized = self.serialize_legacy()?;
 
         if serialized.len() > MAX_TRANSACTION_SIZE {
@@ -356,11 +355,12 @@ impl VersionedTransaction {
             ));
         }
 
-        // First byte is the signature count
-        let num_signatures = bytes[0] as usize;
+        // Signature count is shortvec-encoded
+        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
+            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
 
         // Check if there are enough bytes for signatures
-        if bytes.len() < 1 + (num_signatures * 64) {
+        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
             return Err(SolanaError::DeserializationError(
                 "Not enough bytes for signatures".to_string(),
             ));
@@ -368,7 +368,7 @@ impl VersionedTransaction {
 
         // Extract signatures
         let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = 1; // Skip signature count byte
+        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
 
         for _ in 0..num_signatures {
             if offset + 64 > bytes.len() {

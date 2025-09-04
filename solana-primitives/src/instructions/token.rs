@@ -454,14 +454,14 @@ pub fn transfer_checked(
             is_writable: true,
         },
         AccountMeta {
-            pubkey: *mint,
-            is_signer: false,
-            is_writable: false,
-        },
-        AccountMeta {
             pubkey: *destination,
             is_signer: false,
             is_writable: true,
+        },
+        AccountMeta {
+            pubkey: *mint,
+            is_signer: false,
+            is_writable: false,
         },
         AccountMeta {
             pubkey: *owner,
@@ -636,10 +636,10 @@ mod tests {
         assert_eq!(instruction.accounts.len(), 4);
         assert_eq!(instruction.accounts[0].pubkey, source);
         assert!(instruction.accounts[0].is_writable);
-        assert_eq!(instruction.accounts[1].pubkey, mint);
-        assert!(!instruction.accounts[1].is_writable);
-        assert_eq!(instruction.accounts[2].pubkey, destination);
-        assert!(instruction.accounts[2].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, destination);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, mint);
+        assert!(!instruction.accounts[2].is_writable);
         assert_eq!(instruction.accounts[3].pubkey, owner);
         assert!(instruction.accounts[3].is_signer);
 

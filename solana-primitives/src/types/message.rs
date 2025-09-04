@@ -97,7 +97,8 @@ impl Message {
 
     /// Serializes the message into the byte format required for signing
     /// and for the legacy transaction wire format.
-    /// Note: This uses u8 for array lengths, matching the existing manual_decode logic.
+    /// Note: Lengths are encoded using a Compact-U16 helper (base-128 varint with a u16 upper bound),
+    /// matching the current manual_decode logic.
     pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
         let mut m_wire_bytes: Vec<u8> = Vec::new();
 

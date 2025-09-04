@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google Gemini_ when working with code in this repository.
+This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google Gemini) when working with code in this repository.
 
 ## Common Commands
 
@@ -81,7 +81,7 @@ This crate provides fundamental Solana blockchain primitives for constructing an
 ### Code Quality
 
 3. **Always lint and format before committing code**:
-   - **Required**: Run `just fint-fix` to fix lint issues
+   - **Required**: Run `just lint-fix` to fix lint issues
    - **Required**: Run `cargo fmt` to format code consistently
    - **Required**: Ensure all tests pass with `cargo test`
    - **Best Practice**: Use `just lint` and `just test` shortcuts when available

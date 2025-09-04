@@ -68,7 +68,7 @@ fn test_instruction_builder() {
         .account(owner, true, false)
         .build();
 
-    let ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
+    let ix = transfer_checked(&source, &dest, &mint, &owner, amount, decimals);
 
     // Check program ID
     assert_eq!(builder_ix.program_id, token_program());
@@ -87,46 +87,32 @@ fn test_transaction_builder() {
     let instruction = InstructionBuilder::new(program_id)
         .data(data)
         .accounts(vec![
-            AccountMeta {
-                pubkey: "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka"
+            AccountMeta::new_readonly(
+                "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka"
                     .parse()
                     .unwrap(),
-                is_signer: false,
-                is_writable: false,
-            },
-            AccountMeta {
-                pubkey: "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU"
+            ),
+            AccountMeta::new_writable(
+                "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU"
                     .parse()
                     .unwrap(),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC"
+            ),
+            AccountMeta::new_signer_writable(
+                "A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC"
                     .parse()
                     .unwrap(),
-                is_signer: true,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51"
+            ),
+            AccountMeta::new_writable(
+                "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51"
                     .parse()
                     .unwrap(),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob"
+            ),
+            AccountMeta::new_writable(
+                "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob"
                     .parse()
                     .unwrap(),
-                is_signer: false,
-                is_writable: true,
-            },
-            AccountMeta {
-                pubkey: system_program(),
-                is_signer: false,
-                is_writable: false,
-            },
+            ),
+            AccountMeta::new_readonly(system_program()),
         ]);
 
     let mut tx_builder =
@@ -203,7 +189,7 @@ fn test_complex_transaction() {
     let amount = 1_000_000;
     let decimals = 6;
 
-    let transfer_ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
+    let transfer_ix = transfer_checked(&source, &dest, &mint, &owner, amount, decimals);
     tx_builder.add_instruction(transfer_ix);
 
     // Build the transaction

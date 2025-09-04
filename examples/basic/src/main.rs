@@ -11,9 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ⚠️  WARNING: This is for demonstration only!
     // In production, use proper key generation and secure storage
     let private_key_base58 = "3KSeAx7jkVrjJ2PXjhzVMnJfV3zsyT4ADWtpnHxks5eD";
-    let private_key = bs58::decode(private_key_base58)
-        .into_vec()
-        .map_err(|e| format!("Failed to decode private key: {}", e))?;
+    let private_key = bs58::decode(private_key_base58).into_vec()?;
 
     // Generate corresponding public key
     let fee_payer_pubkey_bytes = get_public_key(&private_key)?;
