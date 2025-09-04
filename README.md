@@ -119,38 +119,16 @@ use solana_primitives::instructions::program_ids::{
 
 ## Examples
 
-See the `examples/` directory for complete working examples:
+See `solana-primitives/examples/` for complete working examples:
 
-- `examples/basic/` - Basic transaction construction
-- `examples/decode_tx/` - Transaction deserialization
+- `basic` - Basic transaction construction
+- `decode_tx` - Transaction deserialization
 
 Run examples with:
 ```bash
 cargo run --example basic
 cargo run --example decode_tx
 ```
-
-## Development
-
-### Building and Testing
-
-```bash
-# Build the project
-cargo build
-
-# Run tests
-cargo test
-
-# Run linter
-just lint-fix
-
-# Format code
-cargo fmt
-
-# Run examples
-cargo run --example basic
-```
-
 
 ## License
 
