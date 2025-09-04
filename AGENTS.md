@@ -15,8 +15,8 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 ### Examples
 - `just example-basic` - Run the basic example
 - `just example-decode-tx` - Run the decode transaction example
-- `cd examples/basic && cargo run` - Run basic example directly
-- `cd examples/decode_tx && cargo run` - Run decode transaction example directly
+- `cargo run --example basic` - Run basic example via Cargo examples
+- `cargo run --example decode_tx` - Run decode transaction example via Cargo examples
 
 ## Architecture Overview
 
@@ -36,7 +36,7 @@ This crate provides fundamental Solana blockchain primitives for constructing an
 1. **Builder Pattern**: `TransactionBuilder` and `InstructionBuilder` provide fluent APIs for constructing transactions
 2. **Minimal Dependencies**: Core functionality with minimal external dependencies to keep the crate lightweight
 3. **Account Metadata Management**: `TransactionBuilder` automatically manages account metadata and deduplication
-4. **Workspace Structure**: Main library in `solana-primitives/` with examples in separate workspace members
+4. **Workspace Structure**: Main library in `solana-primitives/` with examples under `solana-primitives/examples/` using Cargo examples
 
 ### Transaction Construction Flow
 
