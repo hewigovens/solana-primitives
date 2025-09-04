@@ -716,8 +716,10 @@ mod manual_decode {
 
         // Check if we have more data (for address table lookups)
         if offset < bytes.len() {
-            let lookup_table_count = bytes[offset] as usize;
-            offset += 1;
+            let (lookup_table_count, len_bytes_consumed) =
+                crate::decode_compact_u16_len(&bytes[offset..])
+                    .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+            offset += len_bytes_consumed;
 
             for _ in 0..lookup_table_count {
                 if offset + 32 > bytes.len() {
@@ -738,8 +740,10 @@ mod manual_decode {
                         "Message too short: no writable indexes count".to_string(),
                     ));
                 }
-                let writable_indexes_count = bytes[offset] as usize;
-                offset += 1;
+                let (writable_indexes_count, len_bytes_consumed) =
+                    crate::decode_compact_u16_len(&bytes[offset..])
+                        .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+                offset += len_bytes_consumed;
 
                 if offset + writable_indexes_count > bytes.len() {
                     return Err(SolanaError::DeserializationError(
@@ -756,8 +760,10 @@ mod manual_decode {
                         "Message too short: no readonly indexes count".to_string(),
                     ));
                 }
-                let readonly_indexes_count = bytes[offset] as usize;
-                offset += 1;
+                let (readonly_indexes_count, len_bytes_consumed) =
+                    crate::decode_compact_u16_len(&bytes[offset..])
+                        .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
+                offset += len_bytes_consumed;
 
                 if offset + readonly_indexes_count > bytes.len() {
                     return Err(SolanaError::DeserializationError(
