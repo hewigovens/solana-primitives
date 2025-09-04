@@ -6,11 +6,14 @@ use sha2::{Digest, Sha256};
 /// Get the public key from a private key
 pub fn get_public_key(private_key: &[u8]) -> Result<[u8; 32]> {
     if private_key.len() != 32 {
-        return Err(SolanaError::InvalidSignature);
+        return Err(SolanaError::InvalidSignature(format!(
+            "invalid private key length: {}, expected: 32",
+            private_key.len()
+        )));
     }
 
-    let signing_key =
-        SigningKey::try_from(private_key).map_err(|_| SolanaError::InvalidSignature)?;
+    let signing_key = SigningKey::try_from(private_key)
+        .map_err(|_| SolanaError::InvalidSignature("failed to create signing key".to_string()))?;
 
     Ok(signing_key.verifying_key().to_bytes())
 }
@@ -25,7 +28,10 @@ pub fn get_address(private_key: &[u8]) -> Result<String> {
 /// Get a Solana address from a public key
 pub fn get_address_from_public_key(public_key: &[u8]) -> Result<String> {
     if public_key.len() != 32 {
-        return Err(SolanaError::InvalidPubkey);
+        return Err(SolanaError::InvalidPubkey(format!(
+            "invalid public key length: {}, expected: 32",
+            public_key.len()
+        )));
     }
 
     let mut pk_bytes = [0u8; 32];
@@ -43,13 +49,17 @@ pub fn verify_transaction(transaction: &Transaction) -> Result<()> {
 
     for (i, signature) in transaction.signatures.iter().enumerate() {
         let signer_pubkey = &transaction.message.account_keys[i];
-        let verifying_key = VerifyingKey::from_bytes(signer_pubkey.as_bytes())
-            .map_err(|_| SolanaError::InvalidPubkey)?;
+        let verifying_key = VerifyingKey::from_bytes(signer_pubkey.as_bytes()).map_err(|_| {
+            SolanaError::InvalidPubkey("failed to create verifying key from pubkey".to_string())
+        })?;
 
         // Convert our SignatureBytes to the ed25519_dalek Signature type
         let sig_bytes = signature.as_bytes();
         if sig_bytes.len() != 64 {
-            return Err(SolanaError::InvalidSignature);
+            return Err(SolanaError::InvalidSignature(format!(
+                "invalid signature length: {}, expected: 64",
+                sig_bytes.len()
+            )));
         }
 
         let mut sig_array = [0u8; 64];
@@ -59,7 +69,9 @@ pub fn verify_transaction(transaction: &Transaction) -> Result<()> {
 
         verifying_key
             .verify(&message_bytes, &dalek_signature)
-            .map_err(|_| SolanaError::InvalidSignature)?;
+            .map_err(|_| {
+                SolanaError::InvalidSignature("signature verification failed".to_string())
+            })?;
     }
 
     Ok(())
@@ -68,11 +80,14 @@ pub fn verify_transaction(transaction: &Transaction) -> Result<()> {
 /// Sign a message with a private key
 pub fn sign_message(private_key: &[u8], message: &[u8]) -> Result<SignatureBytes> {
     if private_key.len() != 32 {
-        return Err(SolanaError::InvalidSignature);
+        return Err(SolanaError::InvalidSignature(format!(
+            "invalid private key length: {}, expected: 32",
+            private_key.len()
+        )));
     }
 
-    let signing_key =
-        SigningKey::try_from(private_key).map_err(|_| SolanaError::InvalidSignature)?;
+    let signing_key = SigningKey::try_from(private_key)
+        .map_err(|_| SolanaError::InvalidSignature("failed to create signing key".to_string()))?;
 
     let signature = signing_key.sign(message);
     Ok(SignatureBytes::new(signature.to_bytes()))

@@ -107,29 +107,33 @@ impl Message {
         m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
 
         // 2. Account keys
-        let account_keys_len_bytes = crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
+        let account_keys_len_bytes =
+            crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
         m_wire_bytes.extend_from_slice(&account_keys_len_bytes);
         for pubkey in &self.account_keys {
-            m_wire_bytes.extend_from_slice(pubkey.as_bytes()); 
+            m_wire_bytes.extend_from_slice(pubkey.as_bytes());
         }
 
         // 3. Recent blockhash (32 bytes)
         m_wire_bytes.extend_from_slice(&self.recent_blockhash);
 
         // 4. Instructions
-        let instructions_len_bytes = crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
+        let instructions_len_bytes =
+            crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
         m_wire_bytes.extend_from_slice(&instructions_len_bytes);
-        for instruction_item in &self.instructions { 
+        for instruction_item in &self.instructions {
             // program_id_index (1 byte)
             m_wire_bytes.push(instruction_item.program_id_index);
 
             // accounts (Vec<u8>) - these are indices
-            let accounts_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
+            let accounts_len_bytes =
+                crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
             m_wire_bytes.extend_from_slice(&accounts_len_bytes);
             m_wire_bytes.extend_from_slice(&instruction_item.accounts);
 
             // data (Vec<u8>)
-            let data_len_bytes = crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
+            let data_len_bytes =
+                crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
             m_wire_bytes.extend_from_slice(&data_len_bytes);
             m_wire_bytes.extend_from_slice(&instruction_item.data);
         }

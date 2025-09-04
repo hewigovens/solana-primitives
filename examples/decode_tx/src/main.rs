@@ -23,7 +23,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
     Ok(())
 }
 
@@ -68,8 +67,14 @@ fn print_versioned_transaction(tx: &VersionedTransaction) {
                 println!("\nInstruction {}:", i + 1);
                 println!("  Program ID Index: {}", instruction.program_id_index);
                 println!("  Account Indices: {:?}", instruction.accounts);
-                println!("  Data (bs58): {}", bs58::encode(&instruction.data).into_string());
-                println!("  Data (utf8): {}", String::from_utf8_lossy(&instruction.data));
+                println!(
+                    "  Data (bs58): {}",
+                    bs58::encode(&instruction.data).into_string()
+                );
+                println!(
+                    "  Data (utf8): {}",
+                    String::from_utf8_lossy(&instruction.data)
+                );
             }
         }
         VersionedTransaction::V0 {
@@ -111,8 +116,14 @@ fn print_versioned_transaction(tx: &VersionedTransaction) {
                 println!("\nInstruction {}:", i + 1);
                 println!("  Program ID Index: {}", instruction.program_id_index);
                 println!("  Account Indices: {:?}", instruction.accounts);
-                println!("  Data (bs58): {}", bs58::encode(&instruction.data).into_string());
-                println!("  Data (utf8): {}", String::from_utf8_lossy(&instruction.data));
+                println!(
+                    "  Data (bs58): {}",
+                    bs58::encode(&instruction.data).into_string()
+                );
+                println!(
+                    "  Data (utf8): {}",
+                    String::from_utf8_lossy(&instruction.data)
+                );
             }
 
             if !message.address_table_lookups.is_empty() {

@@ -3,16 +3,10 @@ use thiserror::Error;
 /// A custom error type for Solana operations
 #[derive(Debug, Error)]
 pub enum SolanaError {
-    #[error("Invalid public key")]
-    InvalidPubkey,
-    #[error("Invalid public key length")]
-    InvalidPubkeyLength,
-    #[error("Invalid signature")]
-    InvalidSignature,
-    #[error("Invalid signature length")]
-    InvalidSignatureLength,
-    #[error("Invalid signature index")]
-    InvalidSignatureIndex,
+    #[error("Invalid public key: {0}")]
+    InvalidPubkey(String),
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
     #[error("Invalid instruction data")]
     InvalidInstructionData,
     #[error("Invalid message")]
@@ -21,10 +15,22 @@ pub enum SolanaError {
     InvalidTransaction,
     #[error("Serialization error: {0}")]
     SerializationError(String),
-    /// RPC error
-    #[cfg(feature = "jsonrpc")]
-    #[error("RPC error: {0}")]
-    RpcError(String),
+    #[error("Deserialization error: {0}")]
+    DeserializationError(String),
+    #[error("{0}")]
+    GenericError(String),
+}
+
+impl From<&str> for SolanaError {
+    fn from(s: &str) -> Self {
+        SolanaError::GenericError(s.to_string())
+    }
+}
+
+impl From<String> for SolanaError {
+    fn from(s: String) -> Self {
+        SolanaError::GenericError(s)
+    }
 }
 
 /// A type alias for Result with SolanaError

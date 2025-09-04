@@ -24,6 +24,44 @@ pub struct AccountMeta {
     pub is_writable: bool,
 }
 
+impl AccountMeta {
+    /// Create a new AccountMeta that is read-only
+    pub fn new_readonly(pubkey: Pubkey) -> Self {
+        Self {
+            pubkey,
+            is_signer: false,
+            is_writable: false,
+        }
+    }
+
+    /// Create a new AccountMeta that is a signer
+    pub fn new_signer(pubkey: Pubkey) -> Self {
+        Self {
+            pubkey,
+            is_signer: true,
+            is_writable: false,
+        }
+    }
+
+    /// Create a new AccountMeta that is writable
+    pub fn new_writable(pubkey: Pubkey) -> Self {
+        Self {
+            pubkey,
+            is_signer: false,
+            is_writable: true,
+        }
+    }
+
+    /// Create a new AccountMeta that is both a signer and writable
+    pub fn new_signer_writable(pubkey: Pubkey) -> Self {
+        Self {
+            pubkey,
+            is_signer: true,
+            is_writable: true,
+        }
+    }
+}
+
 /// A compiled instruction that references accounts by their indices
 #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct CompiledInstruction {

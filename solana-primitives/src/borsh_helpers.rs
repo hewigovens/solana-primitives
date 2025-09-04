@@ -13,5 +13,6 @@ pub fn compact_array_to_bytes<T: BorshSerialize>(items: &[T]) -> Result<Vec<u8>>
 /// Helper function to convert bytes to a compact array
 pub fn bytes_to_compact_array<T: BorshDeserialize>(bytes: &[u8]) -> Result<Vec<T>> {
     let mut bytes_mut = bytes; // Borsh deserialize expects a mutable slice for some reason
-    Vec::<T>::deserialize(&mut bytes_mut).map_err(|e| SolanaError::SerializationError(e.to_string()))
+    Vec::<T>::deserialize(&mut bytes_mut)
+        .map_err(|e| SolanaError::SerializationError(e.to_string()))
 }

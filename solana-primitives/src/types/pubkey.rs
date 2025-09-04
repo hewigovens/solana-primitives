@@ -54,10 +54,13 @@ impl Pubkey {
     pub fn from_base58(s: &str) -> Result<Self> {
         let bytes = bs58::decode(s)
             .into_vec()
-            .map_err(|_| SolanaError::InvalidPubkeyLength)?;
+            .map_err(|_| SolanaError::InvalidPubkey(format!("failed to decode base58: {}", s)))?;
 
         if bytes.len() != 32 {
-            return Err(SolanaError::InvalidPubkeyLength);
+            return Err(SolanaError::InvalidPubkey(format!(
+                "invalid length: {}, expected: 32",
+                bytes.len()
+            )));
         }
 
         Ok(Self(bytes.try_into().unwrap()))

@@ -12,11 +12,19 @@ pub const MAX_SEED_LEN: usize = 32;
 pub fn find_program_address(program_id: &Pubkey, seeds: &[&[u8]]) -> Result<(Pubkey, u8)> {
     // Validate seeds
     if seeds.len() > MAX_SEEDS {
-        return Err(SolanaError::InvalidPubkey);
+        return Err(SolanaError::InvalidPubkey(format!(
+            "too many seeds: {}, max: {}",
+            seeds.len(),
+            MAX_SEEDS
+        )));
     }
     for seed in seeds {
         if seed.len() > MAX_SEED_LEN {
-            return Err(SolanaError::InvalidPubkey);
+            return Err(SolanaError::InvalidPubkey(format!(
+                "seed too long: {}, max: {}",
+                seed.len(),
+                MAX_SEED_LEN
+            )));
         }
     }
 
@@ -53,7 +61,9 @@ pub fn find_program_address(program_id: &Pubkey, seeds: &[&[u8]]) -> Result<(Pub
         }
 
         if bump == 0 {
-            return Err(SolanaError::InvalidPubkey);
+            return Err(SolanaError::InvalidPubkey(
+                "unable to find valid PDA, all bump seeds exhausted".to_string(),
+            ));
         }
         bump -= 1;
     }
@@ -67,11 +77,19 @@ pub fn create_program_address(
 ) -> Result<Pubkey> {
     // Validate seeds
     if seeds.len() > MAX_SEEDS {
-        return Err(SolanaError::InvalidPubkey);
+        return Err(SolanaError::InvalidPubkey(format!(
+            "too many seeds: {}, max: {}",
+            seeds.len(),
+            MAX_SEEDS
+        )));
     }
     for seed in seeds {
         if seed.len() > MAX_SEED_LEN {
-            return Err(SolanaError::InvalidPubkey);
+            return Err(SolanaError::InvalidPubkey(format!(
+                "seed too long: {}, max: {}",
+                seed.len(),
+                MAX_SEED_LEN
+            )));
         }
     }
 
@@ -100,7 +118,9 @@ pub fn create_program_address(
 
     // Check if it's on curve
     if is_on_curve(&pubkey_bytes) {
-        return Err(SolanaError::InvalidPubkey);
+        return Err(SolanaError::InvalidPubkey(
+            "resulting address is on curve (invalid PDA)".to_string(),
+        ));
     }
 
     Ok(Pubkey::new(pubkey_bytes))
@@ -122,7 +142,7 @@ mod tests {
     use std::str::FromStr;
 
     fn create_test_program_id() -> Pubkey {
-        Pubkey::from_str("11111111111111111111111111111111").unwrap()
+        crate::instructions::program_ids::system_program()
     }
 
     #[test]
@@ -166,7 +186,7 @@ mod tests {
         let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
 
         let result = find_program_address(&program_id, &seed_refs);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey)));
+        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
     }
 
     #[test]
@@ -176,7 +196,7 @@ mod tests {
         let seeds = [&seed[..]];
 
         let result = find_program_address(&program_id, &seeds);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey)));
+        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
     }
 
     #[test]
@@ -262,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_pda_matches_js_example() {
-        let program_id = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        let program_id = crate::instructions::program_ids::system_program();
         let string = b"helloWorld";
         let seeds = [string.as_ref()];
 
