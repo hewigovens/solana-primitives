@@ -3,7 +3,7 @@ members = ["solana-primitives"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 
@@ -16,11 +16,10 @@ codegen-units = 1
 
 [workspace.dependencies]
 ed25519-dalek = "2.0"
-borsh = "0.10.4"
-borsh-derive = "0.10.4"
+borsh = { version = "1.5", features = ["derive"] }
 bs58 = "0.5"
-thiserror = "2.0.12"
+thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
-base64 = "0.22.1"
-hex = "0.4.3"
+base64 = "0.22"
+hex = "0.4"

@@ -46,6 +46,12 @@ impl<'de> Deserialize<'de> for Pubkey {
     }
 }
 
+impl std::fmt::Display for Pubkey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_base58())
+    }
+}
+
 impl Pubkey {
     pub fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
