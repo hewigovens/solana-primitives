@@ -2,21 +2,19 @@ name: Lint
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   lint:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install just
-      run: cargo install just
-    - name: Run lint
-      run: just lint
+      - uses: actions/checkout@v4
+
+      - name: Run lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
