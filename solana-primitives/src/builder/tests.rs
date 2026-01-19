@@ -68,7 +68,7 @@ fn test_instruction_builder() {
         .account(owner, true, false)
         .build();
 
-    let ix = transfer_checked(&source, &dest, &mint, &owner, amount, decimals);
+    let ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
 
     // Check program ID
     assert_eq!(builder_ix.program_id, token_program());
@@ -189,7 +189,7 @@ fn test_complex_transaction() {
     let amount = 1_000_000;
     let decimals = 6;
 
-    let transfer_ix = transfer_checked(&source, &dest, &mint, &owner, amount, decimals);
+    let transfer_ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
     tx_builder.add_instruction(transfer_ix);
 
     // Build the transaction
