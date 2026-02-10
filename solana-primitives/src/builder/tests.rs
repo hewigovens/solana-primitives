@@ -1,14 +1,14 @@
+use crate::Pubkey;
 use crate::builder::{InstructionBuilder, TransactionBuilder};
 use crate::instructions::{
     program_ids::{system_program, token_program},
     system::create_account,
     token::transfer_checked,
 };
-use crate::types::instruction::AccountMeta;
 use crate::types::VersionedTransaction;
-use crate::Pubkey;
-use base64::engine::general_purpose::STANDARD;
+use crate::types::instruction::AccountMeta;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 fn mint_pubkey() -> Pubkey {
     Pubkey::from_base58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap()

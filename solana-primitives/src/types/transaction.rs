@@ -1,11 +1,11 @@
+use crate::Result;
 use crate::crypto::sign_message;
 use crate::error::SolanaError;
 use crate::instructions::program_ids::COMPUTE_BUDGET_PROGRAM_ID;
 use crate::types::{
-    CompiledInstruction, Instruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey,
-    SignatureBytes, VersionedMessage, VersionedMessageV0, MAX_TRANSACTION_SIZE,
+    CompiledInstruction, Instruction, LegacyMessage, MAX_TRANSACTION_SIZE, Message,
+    MessageAddressTableLookup, Pubkey, SignatureBytes, VersionedMessage, VersionedMessageV0,
 };
-use crate::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
@@ -214,11 +214,10 @@ impl Transaction {
                 .account_keys
                 .iter()
                 .position(|k| k == public_key)
+                && index < num_required_sigs
             {
-                if index < num_required_sigs {
-                    let signature = sign_message(private_key, &message_bytes)?;
-                    self.signatures[index] = signature;
-                }
+                let signature = sign_message(private_key, &message_bytes)?;
+                self.signatures[index] = signature;
             }
         }
 
@@ -427,7 +426,7 @@ impl VersionedTransaction {
             _ => {
                 return Err(SolanaError::SerializationError(
                     "add_instruction only supported for legacy transactions".to_string(),
-                ))
+                ));
             }
         };
 
@@ -982,7 +981,7 @@ mod tests {
         instructions::system,
         types::{Pubkey, SignatureBytes},
     };
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     /// Legacy tx with SetComputeUnitLimit(420000) and SetComputeUnitPrice(70000).
     const LEGACY_TX: &str = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAgWAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEbrtjJdvWJAv9GZTGL8LaZtMvDe4j2ery4z7rOkRbioxZflXLFqWqlAt1REFSiam0ljvfB1tbBruEpGRTcUQIyQ+ddH9NRneQZQXje5U/3c4cZ2f1JESi76CvBvRoQ6I1LeNzfZ4ZONkowCnqCyeo5+D6Q21gn3U7HVw/KD3HyUW5gVpu5F8ZojWkXLg/+3N6q3ojiaqYyBIbz7VP7jS5Yktrxv5b22C/EFSDs5jUPA7Gz3GLdBNs0iwBHlqUqNEeyNpDX0HWNHV2LiVDOx6m018ea6P+1xroNvWKhmDeTW7oqHXAEK1ih5IO68BBiiKqWNR5VZdBgBsnR+rZKfpfuyE3yQziYO+SoWzCXuvQLyVcRCNKJrACzaN8XXUR1z3rOt8T1lYUIIAQS7tqgcLRsn18N4vVQgXQyv3bQWjh3JtpQT3Bgy9N9myGC4PDjGuVnx2Y7mF4eqlysb0rgrdrB2+FMK6YBPXtlXF4QPTY6rEe+hxkBpCoGK7UJu5BHUK4gJhAewgMolkoyq6sTbFQFuR86447k9ky2veh5uGg40gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hBUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B+oQEEFRI0Gm4hX/quBhPtof2NGGMA12sQ53BrrO1WYoPAAAAAAAQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpDgNoX46QkFPkWBIcZvWnau3HcGqhHIL4qpUqjyt4ealuCa42Moiy1mB8REcWJlkis4eCMyKfY2HMRfldn8r2XwcQAAUCoGgGABAACQNwEQEAAAAAAA8GAAYAEw4UAQAVERQUEgAHExEGCQoCBAULDAgBMSsE7QsayR5iC50OAAAAAAA8XqkAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEBAAAABgIUAwYAAAEJFAMKAwAJA8wSAAAAAAAADgIADQwCAAAAODEAAAAAAAA=";
@@ -1081,9 +1080,10 @@ mod tests {
         let mut tx = decode_mayan_tx();
         let from = tx.account_keys()[0];
         let to = Pubkey::new([2; 32]);
-        assert!(tx
-            .add_instruction(system::transfer(&from, &to, 100))
-            .is_err());
+        assert!(
+            tx.add_instruction(system::transfer(&from, &to, 100))
+                .is_err()
+        );
     }
 
     #[test]

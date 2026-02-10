@@ -1,6 +1,6 @@
 use base64::Engine;
 use solana_primitives::{
-    get_public_key, instructions::system::transfer, Pubkey, TransactionBuilder,
+    Pubkey, TransactionBuilder, get_public_key, instructions::system::transfer,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,4 +116,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

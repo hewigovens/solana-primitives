@@ -2,8 +2,11 @@
 name = "solana-primitives"
 version.workspace = true
 edition.workspace = true
-description = "Fundamental data structures and tools needed to construct and submit Solana transactions."
-license = "MIT"
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 ed25519-dalek.workspace = true

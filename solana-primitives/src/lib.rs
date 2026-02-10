@@ -12,6 +12,6 @@ pub use crypto::*;
 pub use error::{Result, SolanaError};
 pub use instructions::*;
 pub use short_vec::{
-    decode_compact_u16_len, encode_length_to_compact_u16_bytes, ShortU16, ShortVec,
+    ShortU16, ShortVec, decode_compact_u16_len, encode_length_to_compact_u16_bytes,
 };
 pub use types::*;

@@ -2,9 +2,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use serde::{
+    Deserialize, Serialize,
     de::{self, Deserializer, SeqAccess, Visitor},
     ser::{self, SerializeTuple, Serializer},
-    Deserialize, Serialize,
 };
 use std::{convert::TryFrom, fmt, marker::PhantomData, vec::Vec};
 

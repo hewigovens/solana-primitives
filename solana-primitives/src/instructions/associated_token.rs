@@ -1,7 +1,7 @@
 use crate::instructions::program_ids::{
     ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
-use crate::types::{find_program_address, AccountMeta, Instruction, Pubkey};
+use crate::types::{AccountMeta, Instruction, Pubkey, find_program_address};
 
 /// Create an associated token account instruction
 pub fn create_associated_token_account(
