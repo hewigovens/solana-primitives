@@ -15,6 +15,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-
+      - uses: extractions/setup-just@v3
       - name: Run lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: just lint

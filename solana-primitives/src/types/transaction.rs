@@ -451,8 +451,8 @@ impl VersionedTransaction {
             }
         }
 
-        let insert_pos = message.account_keys.len()
-            - message.header.num_readonly_unsigned_accounts as usize;
+        let insert_pos =
+            message.account_keys.len() - message.header.num_readonly_unsigned_accounts as usize;
         for (i, pubkey) in new_writable_non_signers.iter().enumerate() {
             message.account_keys.insert(insert_pos + i, *pubkey);
         }
@@ -504,12 +504,12 @@ impl VersionedTransaction {
 
     pub fn serialize_message(&self) -> Result<Vec<u8>> {
         match self {
-            Self::Legacy { message, .. } => {
-                message.serialize_for_signing().map_err(SolanaError::SerializationError)
-            }
-            Self::V0 { message, .. } => {
-                message.serialize_for_signing().map_err(SolanaError::SerializationError)
-            }
+            Self::Legacy { message, .. } => message
+                .serialize_for_signing()
+                .map_err(SolanaError::SerializationError),
+            Self::V0 { message, .. } => message
+                .serialize_for_signing()
+                .map_err(SolanaError::SerializationError),
         }
     }
 
@@ -978,8 +978,11 @@ mod manual_decode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{instructions::system, types::{Pubkey, SignatureBytes}};
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use crate::{
+        instructions::system,
+        types::{Pubkey, SignatureBytes},
+    };
+    use base64::{engine::general_purpose::STANDARD, Engine};
 
     /// Legacy tx with SetComputeUnitLimit(420000) and SetComputeUnitPrice(70000).
     const LEGACY_TX: &str = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAgWAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEbrtjJdvWJAv9GZTGL8LaZtMvDe4j2ery4z7rOkRbioxZflXLFqWqlAt1REFSiam0ljvfB1tbBruEpGRTcUQIyQ+ddH9NRneQZQXje5U/3c4cZ2f1JESi76CvBvRoQ6I1LeNzfZ4ZONkowCnqCyeo5+D6Q21gn3U7HVw/KD3HyUW5gVpu5F8ZojWkXLg/+3N6q3ojiaqYyBIbz7VP7jS5Yktrxv5b22C/EFSDs5jUPA7Gz3GLdBNs0iwBHlqUqNEeyNpDX0HWNHV2LiVDOx6m018ea6P+1xroNvWKhmDeTW7oqHXAEK1ih5IO68BBiiKqWNR5VZdBgBsnR+rZKfpfuyE3yQziYO+SoWzCXuvQLyVcRCNKJrACzaN8XXUR1z3rOt8T1lYUIIAQS7tqgcLRsn18N4vVQgXQyv3bQWjh3JtpQT3Bgy9N9myGC4PDjGuVnx2Y7mF4eqlysb0rgrdrB2+FMK6YBPXtlXF4QPTY6rEe+hxkBpCoGK7UJu5BHUK4gJhAewgMolkoyq6sTbFQFuR86447k9ky2veh5uGg40gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hBUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B+oQEEFRI0Gm4hX/quBhPtof2NGGMA12sQ53BrrO1WYoPAAAAAAAQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpDgNoX46QkFPkWBIcZvWnau3HcGqhHIL4qpUqjyt4ealuCa42Moiy1mB8REcWJlkis4eCMyKfY2HMRfldn8r2XwcQAAUCoGgGABAACQNwEQEAAAAAAA8GAAYAEw4UAQAVERQUEgAHExEGCQoCBAULDAgBMSsE7QsayR5iC50OAAAAAAA8XqkAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEBAAAABgIUAwYAAAEJFAMKAwAJA8wSAAAAAAAADgIADQwCAAAAODEAAAAAAAA=";
@@ -1036,7 +1039,7 @@ mod tests {
     #[test]
     fn set_compute_unit_price_legacy() {
         let mut tx = decode_legacy_tx();
-        assert_eq!(tx.set_compute_unit_price(999_999).unwrap(), true);
+        assert!(tx.set_compute_unit_price(999_999).unwrap());
         assert_eq!(tx.get_compute_unit_price(), Some(999_999));
     }
 
@@ -1053,7 +1056,7 @@ mod tests {
     #[test]
     fn set_compute_unit_limit_legacy() {
         let mut tx = decode_legacy_tx();
-        assert_eq!(tx.set_compute_unit_limit(500_000).unwrap(), true);
+        assert!(tx.set_compute_unit_limit(500_000).unwrap());
         assert_eq!(tx.get_compute_unit_limit(), Some(500_000));
     }
 
@@ -1065,7 +1068,8 @@ mod tests {
 
         let from = tx.account_keys()[0];
         let to = Pubkey::new([99; 32]);
-        tx.add_instruction(system::transfer(&from, &to, 5000)).unwrap();
+        tx.add_instruction(system::transfer(&from, &to, 5000))
+            .unwrap();
 
         assert_eq!(tx.instructions().len(), initial_ix_count + 1);
         assert!(tx.account_keys().contains(&to));
@@ -1077,7 +1081,9 @@ mod tests {
         let mut tx = decode_mayan_tx();
         let from = tx.account_keys()[0];
         let to = Pubkey::new([2; 32]);
-        assert!(tx.add_instruction(system::transfer(&from, &to, 100)).is_err());
+        assert!(tx
+            .add_instruction(system::transfer(&from, &to, 100))
+            .is_err());
     }
 
     #[test]

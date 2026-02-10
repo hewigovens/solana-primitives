@@ -72,7 +72,12 @@ pub struct LegacyMessage {
 
 impl LegacyMessage {
     pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)
+        serialize_message_body(
+            &self.header,
+            &self.account_keys,
+            &self.recent_blockhash,
+            &self.instructions,
+        )
     }
 }
 
@@ -102,21 +107,29 @@ impl VersionedMessageV0 {
         bytes.push(0x80);
 
         // Message body (same as legacy)
-        let body = serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)?;
+        let body = serialize_message_body(
+            &self.header,
+            &self.account_keys,
+            &self.recent_blockhash,
+            &self.instructions,
+        )?;
         bytes.extend_from_slice(&body);
 
         // Address table lookups
-        let lookup_len = crate::encode_length_to_compact_u16_bytes(self.address_table_lookups.len())?;
+        let lookup_len =
+            crate::encode_length_to_compact_u16_bytes(self.address_table_lookups.len())?;
         bytes.extend_from_slice(&lookup_len);
 
         for lookup in &self.address_table_lookups {
             bytes.extend_from_slice(lookup.account_key.as_bytes());
 
-            let writable_len = crate::encode_length_to_compact_u16_bytes(lookup.writable_indexes.len())?;
+            let writable_len =
+                crate::encode_length_to_compact_u16_bytes(lookup.writable_indexes.len())?;
             bytes.extend_from_slice(&writable_len);
             bytes.extend_from_slice(&lookup.writable_indexes);
 
-            let readonly_len = crate::encode_length_to_compact_u16_bytes(lookup.readonly_indexes.len())?;
+            let readonly_len =
+                crate::encode_length_to_compact_u16_bytes(lookup.readonly_indexes.len())?;
             bytes.extend_from_slice(&readonly_len);
             bytes.extend_from_slice(&lookup.readonly_indexes);
         }
@@ -181,7 +194,12 @@ impl Message {
     /// Serializes the message into the byte format required for signing
     /// and for the legacy transaction wire format.
     pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)
+        serialize_message_body(
+            &self.header,
+            &self.account_keys,
+            &self.recent_blockhash,
+            &self.instructions,
+        )
     }
 }
 
