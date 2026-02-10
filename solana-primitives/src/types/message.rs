@@ -3,6 +3,49 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use serde::{Deserialize, Serialize};
 
+/// Serialize the common message body (header + account keys + blockhash + instructions).
+/// Shared by Legacy, Message, and V0 message types.
+fn serialize_message_body(
+    header: &MessageHeader,
+    account_keys: &[Pubkey],
+    recent_blockhash: &[u8; 32],
+    instructions: &[CompiledInstruction],
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+
+    // 1. Header (3 bytes)
+    bytes.push(header.num_required_signatures);
+    bytes.push(header.num_readonly_signed_accounts);
+    bytes.push(header.num_readonly_unsigned_accounts);
+
+    // 2. Account keys
+    let len = crate::encode_length_to_compact_u16_bytes(account_keys.len())?;
+    bytes.extend_from_slice(&len);
+    for pubkey in account_keys {
+        bytes.extend_from_slice(pubkey.as_bytes());
+    }
+
+    // 3. Recent blockhash (32 bytes)
+    bytes.extend_from_slice(recent_blockhash);
+
+    // 4. Instructions
+    let len = crate::encode_length_to_compact_u16_bytes(instructions.len())?;
+    bytes.extend_from_slice(&len);
+    for ix in instructions {
+        bytes.push(ix.program_id_index);
+
+        let len = crate::encode_length_to_compact_u16_bytes(ix.accounts.len())?;
+        bytes.extend_from_slice(&len);
+        bytes.extend_from_slice(&ix.accounts);
+
+        let len = crate::encode_length_to_compact_u16_bytes(ix.data.len())?;
+        bytes.extend_from_slice(&len);
+        bytes.extend_from_slice(&ix.data);
+    }
+
+    Ok(bytes)
+}
+
 /// The message header, identifying signed and read-only `account_keys`.
 #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct MessageHeader {
@@ -27,6 +70,12 @@ pub struct LegacyMessage {
     pub instructions: Vec<CompiledInstruction>,
 }
 
+impl LegacyMessage {
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
+        serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)
+    }
+}
+
 /// Versioned message format V0
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct VersionedMessageV0 {
@@ -40,6 +89,40 @@ pub struct VersionedMessageV0 {
     pub instructions: Vec<CompiledInstruction>,
     /// List of address lookup table references
     pub address_table_lookups: Vec<MessageAddressTableLookup>,
+}
+
+impl VersionedMessageV0 {
+    /// Serialize the V0 message to wire bytes for signing.
+    ///
+    /// Format: `[0x80]` version prefix + header + account keys + blockhash + instructions + address table lookups
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+
+        // V0 version prefix
+        bytes.push(0x80);
+
+        // Message body (same as legacy)
+        let body = serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)?;
+        bytes.extend_from_slice(&body);
+
+        // Address table lookups
+        let lookup_len = crate::encode_length_to_compact_u16_bytes(self.address_table_lookups.len())?;
+        bytes.extend_from_slice(&lookup_len);
+
+        for lookup in &self.address_table_lookups {
+            bytes.extend_from_slice(lookup.account_key.as_bytes());
+
+            let writable_len = crate::encode_length_to_compact_u16_bytes(lookup.writable_indexes.len())?;
+            bytes.extend_from_slice(&writable_len);
+            bytes.extend_from_slice(&lookup.writable_indexes);
+
+            let readonly_len = crate::encode_length_to_compact_u16_bytes(lookup.readonly_indexes.len())?;
+            bytes.extend_from_slice(&readonly_len);
+            bytes.extend_from_slice(&lookup.readonly_indexes);
+        }
+
+        Ok(bytes)
+    }
 }
 
 /// Versioned message format
@@ -97,48 +180,8 @@ impl Message {
 
     /// Serializes the message into the byte format required for signing
     /// and for the legacy transaction wire format.
-    /// Note: Lengths are encoded using a Compact-U16 helper (base-128 varint with a u16 upper bound),
-    /// matching the current manual_decode logic.
     pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        let mut m_wire_bytes: Vec<u8> = Vec::new();
-
-        // 1. Header (3 bytes)
-        m_wire_bytes.push(self.header.num_required_signatures);
-        m_wire_bytes.push(self.header.num_readonly_signed_accounts);
-        m_wire_bytes.push(self.header.num_readonly_unsigned_accounts);
-
-        // 2. Account keys
-        let account_keys_len_bytes =
-            crate::encode_length_to_compact_u16_bytes(self.account_keys.len())?;
-        m_wire_bytes.extend_from_slice(&account_keys_len_bytes);
-        for pubkey in &self.account_keys {
-            m_wire_bytes.extend_from_slice(pubkey.as_bytes());
-        }
-
-        // 3. Recent blockhash (32 bytes)
-        m_wire_bytes.extend_from_slice(&self.recent_blockhash);
-
-        // 4. Instructions
-        let instructions_len_bytes =
-            crate::encode_length_to_compact_u16_bytes(self.instructions.len())?;
-        m_wire_bytes.extend_from_slice(&instructions_len_bytes);
-        for instruction_item in &self.instructions {
-            // program_id_index (1 byte)
-            m_wire_bytes.push(instruction_item.program_id_index);
-
-            // accounts (Vec<u8>) - these are indices
-            let accounts_len_bytes =
-                crate::encode_length_to_compact_u16_bytes(instruction_item.accounts.len())?;
-            m_wire_bytes.extend_from_slice(&accounts_len_bytes);
-            m_wire_bytes.extend_from_slice(&instruction_item.accounts);
-
-            // data (Vec<u8>)
-            let data_len_bytes =
-                crate::encode_length_to_compact_u16_bytes(instruction_item.data.len())?;
-            m_wire_bytes.extend_from_slice(&data_len_bytes);
-            m_wire_bytes.extend_from_slice(&instruction_item.data);
-        }
-        Ok(m_wire_bytes)
+        serialize_message_body(&self.header, &self.account_keys, &self.recent_blockhash, &self.instructions)
     }
 }
 

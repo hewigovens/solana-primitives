@@ -1,8 +1,9 @@
 use crate::crypto::sign_message;
 use crate::error::SolanaError;
+use crate::instructions::program_ids::COMPUTE_BUDGET_PROGRAM_ID;
 use crate::types::{
-    CompiledInstruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey, SignatureBytes,
-    VersionedMessage, VersionedMessageV0, MAX_TRANSACTION_SIZE,
+    CompiledInstruction, Instruction, LegacyMessage, Message, MessageAddressTableLookup, Pubkey,
+    SignatureBytes, VersionedMessage, VersionedMessageV0, MAX_TRANSACTION_SIZE,
 };
 use crate::Result;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -345,6 +346,185 @@ impl VersionedTransaction {
             Self::Legacy { message, .. } => &message.instructions,
             Self::V0 { message, .. } => &message.instructions,
         }
+    }
+
+    pub fn signatures(&self) -> &[SignatureBytes] {
+        match self {
+            Self::Legacy { signatures, .. } => signatures,
+            Self::V0 { signatures, .. } => signatures,
+        }
+    }
+
+    pub fn signatures_mut(&mut self) -> &mut Vec<SignatureBytes> {
+        match self {
+            Self::Legacy { signatures, .. } => signatures,
+            Self::V0 { signatures, .. } => signatures,
+        }
+    }
+
+    pub fn instructions_mut(&mut self) -> &mut Vec<CompiledInstruction> {
+        match self {
+            Self::Legacy { message, .. } => &mut message.instructions,
+            Self::V0 { message, .. } => &mut message.instructions,
+        }
+    }
+
+    fn compute_budget_program_index(&self) -> Option<u8> {
+        let cb_pubkey = Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).ok()?;
+        self.account_keys()
+            .iter()
+            .position(|k| *k == cb_pubkey)
+            .map(|i| i as u8)
+    }
+
+    pub fn get_compute_unit_price(&self) -> Option<u64> {
+        let idx = self.compute_budget_program_index()?;
+        for ix in self.instructions() {
+            if ix.program_id_index == idx && ix.data.len() == 9 && ix.data[0] == 3 {
+                return Some(u64::from_le_bytes(ix.data[1..9].try_into().ok()?));
+            }
+        }
+        None
+    }
+
+    pub fn set_compute_unit_price(&mut self, micro_lamports: u64) -> Result<bool> {
+        if let Some(idx) = self.compute_budget_program_index() {
+            for ix in self.instructions_mut() {
+                if ix.program_id_index == idx && ix.data.len() == 9 && ix.data[0] == 3 {
+                    ix.data[1..9].copy_from_slice(&micro_lamports.to_le_bytes());
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn get_compute_unit_limit(&self) -> Option<u32> {
+        let idx = self.compute_budget_program_index()?;
+        for ix in self.instructions() {
+            if ix.program_id_index == idx && ix.data.len() == 5 && ix.data[0] == 2 {
+                return Some(u32::from_le_bytes(ix.data[1..5].try_into().ok()?));
+            }
+        }
+        None
+    }
+
+    pub fn set_compute_unit_limit(&mut self, units: u32) -> Result<bool> {
+        if let Some(idx) = self.compute_budget_program_index() {
+            for ix in self.instructions_mut() {
+                if ix.program_id_index == idx && ix.data.len() == 5 && ix.data[0] == 2 {
+                    ix.data[1..5].copy_from_slice(&units.to_le_bytes());
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn add_instruction(&mut self, instruction: Instruction) -> Result<()> {
+        let message = match self {
+            Self::Legacy { message, .. } => message,
+            _ => {
+                return Err(SolanaError::SerializationError(
+                    "add_instruction only supported for legacy transactions".to_string(),
+                ))
+            }
+        };
+
+        let mut new_writable_non_signers: Vec<Pubkey> = Vec::new();
+        let mut new_readonly_non_signers: Vec<Pubkey> = Vec::new();
+
+        if !message.account_keys.contains(&instruction.program_id) {
+            new_readonly_non_signers.push(instruction.program_id);
+        }
+
+        for meta in &instruction.accounts {
+            if !message.account_keys.contains(&meta.pubkey)
+                && !new_writable_non_signers.contains(&meta.pubkey)
+                && !new_readonly_non_signers.contains(&meta.pubkey)
+            {
+                if meta.is_writable && !meta.is_signer {
+                    new_writable_non_signers.push(meta.pubkey);
+                } else if !meta.is_signer {
+                    new_readonly_non_signers.push(meta.pubkey);
+                }
+            }
+        }
+
+        let insert_pos = message.account_keys.len()
+            - message.header.num_readonly_unsigned_accounts as usize;
+        for (i, pubkey) in new_writable_non_signers.iter().enumerate() {
+            message.account_keys.insert(insert_pos + i, *pubkey);
+        }
+
+        let num_inserted = new_writable_non_signers.len();
+        if num_inserted > 0 {
+            for ix in &mut message.instructions {
+                if (ix.program_id_index as usize) >= insert_pos {
+                    ix.program_id_index += num_inserted as u8;
+                }
+                for acc in &mut ix.accounts {
+                    if (*acc as usize) >= insert_pos {
+                        *acc += num_inserted as u8;
+                    }
+                }
+            }
+        }
+
+        for pubkey in &new_readonly_non_signers {
+            message.account_keys.push(*pubkey);
+        }
+        message.header.num_readonly_unsigned_accounts += new_readonly_non_signers.len() as u8;
+
+        let program_id_index = message
+            .account_keys
+            .iter()
+            .position(|k| *k == instruction.program_id)
+            .unwrap() as u8;
+        let accounts: Vec<u8> = instruction
+            .accounts
+            .iter()
+            .map(|meta| {
+                message
+                    .account_keys
+                    .iter()
+                    .position(|k| *k == meta.pubkey)
+                    .unwrap() as u8
+            })
+            .collect();
+
+        message.instructions.push(CompiledInstruction {
+            program_id_index,
+            accounts,
+            data: instruction.data,
+        });
+
+        Ok(())
+    }
+
+    pub fn serialize_message(&self) -> Result<Vec<u8>> {
+        match self {
+            Self::Legacy { message, .. } => {
+                message.serialize_for_signing().map_err(SolanaError::SerializationError)
+            }
+            Self::V0 { message, .. } => {
+                message.serialize_for_signing().map_err(SolanaError::SerializationError)
+            }
+        }
+    }
+
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        let signatures = self.signatures();
+        let sig_len = crate::encode_length_to_compact_u16_bytes(signatures.len())
+            .map_err(SolanaError::SerializationError)?;
+        bytes.extend_from_slice(&sig_len);
+        for sig in signatures {
+            bytes.extend_from_slice(sig.as_bytes());
+        }
+        let message_bytes = self.serialize_message()?;
+        bytes.extend_from_slice(&message_bytes);
+        Ok(bytes)
     }
 
     /// Deserialize a versioned transaction from bytes
@@ -798,83 +978,148 @@ mod manual_decode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        types::{CompiledInstruction, MessageHeader, Pubkey, SignatureBytes},
-        VersionedMessageV0,
-    };
+    use crate::{instructions::system, types::{Pubkey, SignatureBytes}};
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
-    fn create_test_message() -> Message {
-        let header = MessageHeader {
-            num_required_signatures: 1,
-            num_readonly_signed_accounts: 0,
-            num_readonly_unsigned_accounts: 1,
-        };
-        let account_keys = vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])];
-        let recent_blockhash = [0u8; 32];
-        let instructions = vec![CompiledInstruction {
-            program_id_index: 1,
-            accounts: vec![0],
-            data: vec![],
-        }];
+    /// Legacy tx with SetComputeUnitLimit(420000) and SetComputeUnitPrice(70000).
+    const LEGACY_TX: &str = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAgWAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEbrtjJdvWJAv9GZTGL8LaZtMvDe4j2ery4z7rOkRbioxZflXLFqWqlAt1REFSiam0ljvfB1tbBruEpGRTcUQIyQ+ddH9NRneQZQXje5U/3c4cZ2f1JESi76CvBvRoQ6I1LeNzfZ4ZONkowCnqCyeo5+D6Q21gn3U7HVw/KD3HyUW5gVpu5F8ZojWkXLg/+3N6q3ojiaqYyBIbz7VP7jS5Yktrxv5b22C/EFSDs5jUPA7Gz3GLdBNs0iwBHlqUqNEeyNpDX0HWNHV2LiVDOx6m018ea6P+1xroNvWKhmDeTW7oqHXAEK1ih5IO68BBiiKqWNR5VZdBgBsnR+rZKfpfuyE3yQziYO+SoWzCXuvQLyVcRCNKJrACzaN8XXUR1z3rOt8T1lYUIIAQS7tqgcLRsn18N4vVQgXQyv3bQWjh3JtpQT3Bgy9N9myGC4PDjGuVnx2Y7mF4eqlysb0rgrdrB2+FMK6YBPXtlXF4QPTY6rEe+hxkBpCoGK7UJu5BHUK4gJhAewgMolkoyq6sTbFQFuR86447k9ky2veh5uGg40gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjJclj04kifG7PRApFI4NgwtaE5na/xCEBI572Nvp+FkDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hBUpTWpkpIQZNJOhxYNo4fHw1td28kruB5B+oQEEFRI0Gm4hX/quBhPtof2NGGMA12sQ53BrrO1WYoPAAAAAAAQbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+/wCpDgNoX46QkFPkWBIcZvWnau3HcGqhHIL4qpUqjyt4ealuCa42Moiy1mB8REcWJlkis4eCMyKfY2HMRfldn8r2XwcQAAUCoGgGABAACQNwEQEAAAAAAA8GAAYAEw4UAQAVERQUEgAHExEGCQoCBAULDAgBMSsE7QsayR5iC50OAAAAAAA8XqkAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEBAAAABgIUAwYAAAEJFAMKAwAJA8wSAAAAAAAADgIADQwCAAAAODEAAAAAAAA=";
 
-        Message::new(header, account_keys, recent_blockhash, instructions)
+    /// https://solscan.io/tx/2DZEgrPpdwCu2JcQZJCFivcmLSNMHMmDth9ujqFFZ8UeaEX6EqJmFTfZ43c7LgWqu85wiFhqo2h8PukruvpS4g4u
+    const MAYAN_V0_TX: &str = "ATzYOiofQZSWsNe3SxxEPip+Xp9A2Fji+h0xfs7FkmvQxNNgwjeEbTlMr7+e42q9vcvExw2CX4PgNBRuY77O+waAAQAEDPlBHYJN7SVAqQdmNtdFQsCIDVJuEnf59VTtTCOGI7yLh4jpmImexNtJSORTO+sbJ63Aysdx88si41jIW1Wf65qHxwlVbaZ8xI24o/VzmleK1NqPB2lMTcy78ZFbqJ6agIqQAqWC7XmuIVDA/VxhSMZPxFOazPZMJbWyD+TYtXxA3sS/qzC61MydFxPOY3xt62Ug5Tp3r/hC0NimkXNfrMH0UmoX+WTY7c2jVeACjg8EqVgtZZSXgaQRvotGaelPhCySBd5s0S8tvrZZSGGBUknE3Jjh4aGsgXpNY0QHkFnJayU0QDsmAQ7sF/E5yI6Oq1k8w8tnKB6wJR28JzZwp3KVGAf9PgfpG6VoBYOYtT4QWhLzz8wJo5Da/9f9tVVfo7Qj5Z1paZLqq3kUJ1PAm9bYE1qpQE9jUkcSHEnSn0OVAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAGTCSuZOXkbU4/LKndRkF4gm16E7to0DdpTPoefoS0rYF08m4FFLws+yIpIkWYIyALDIz0sekCn1BgZGSqLNo5CwsAF0FkUEJ2ZE5kVGxlWmNsc25JeDVkeUExCgAFAhxCBwAKAAkDBBcBAAAAAAAJBxUABgUWGRQACQcVAAEAGxkUAQEJAxkAAQwCAAAAC/UHPQYAAAAJAhQBAREJBxUAAwAWGRQBAQgoHAABAxsWFBQGHRwhACITAQMPERIUBBACBxweAA4gHw0MAQMbFhQUGjIBLQAAALtk+swxxK8UC/UHPQYAAAD8nvqKAAAAAGQAAAAAAAIAAAAaQAYAAl8A0CAAAgkEFAEAAAEJCQoYAAAFBgMWFxQZxgEgTCkMJ6KE2yRjS4oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhOLnPgTBemY6Iqc117gEL72WnXMeAAAAAAAAAAAAAAAAAIM1ifzW7bbgj0x8MtT3G1S9oCkT/ySLiQAAAAAAAAAAAAAAAG4DAAAAAAAA8dcFAAAAAAA7a4ppAAAAAAAAAAAAAAAAAAAAAN3bmpXkQ6IE64ZQ1epXjtcH/iEjAAMC0SsrhG32PclzqA5blk8lqOrlLpR5OoOt60ksQpGLgw4D2cMN+5YRja4DNaX11bThHmwP8vCzdRYtSPXpFGWT2KsACgUGESAhKSowMTQme3jXiWKuyj4qkRn+CZK3WspZpXBM+tnHyaYm4WA/BAMICgsDBgkMIbxt+8RM8X78HZP9nB+0Ah2xfOX9io4UH0AdkLgPT00Fdnd6fH4CdHU=";
+
+    fn decode_legacy_tx() -> VersionedTransaction {
+        let data = STANDARD.decode(LEGACY_TX).unwrap();
+        VersionedTransaction::deserialize_with_version(&data).unwrap()
+    }
+
+    fn decode_mayan_tx() -> VersionedTransaction {
+        let data = STANDARD.decode(MAYAN_V0_TX).unwrap();
+        VersionedTransaction::deserialize_with_version(&data).unwrap()
     }
 
     #[test]
-    fn test_transaction() {
-        let message = create_test_message();
-        let mut transaction = Transaction::new(message);
-
-        // Test initial state
-        assert_eq!(transaction.signatures.len(), 0);
-        assert_eq!(transaction.num_required_signatures(), 1);
-        assert_eq!(transaction.num_readonly_signed_accounts(), 0);
-        assert_eq!(transaction.num_readonly_unsigned_accounts(), 1);
-
-        // Test adding signature
-        let signature = SignatureBytes::new([0; 64]);
-        transaction.add_signature(signature);
-        assert_eq!(transaction.signatures.len(), 1);
+    fn decode_legacy() {
+        let tx = decode_legacy_tx();
+        assert!(matches!(tx, VersionedTransaction::Legacy { .. }));
+        assert_eq!(tx.signatures().len(), 1);
+        assert_eq!(tx.account_keys().len(), 22);
+        assert_eq!(tx.instructions().len(), 7);
     }
 
     #[test]
-    fn test_versioned_transaction() {
-        let message = VersionedMessage::V0(VersionedMessageV0 {
-            header: MessageHeader {
-                num_required_signatures: 1,
-                num_readonly_signed_accounts: 0,
-                num_readonly_unsigned_accounts: 1,
-            },
-            account_keys: vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])],
-            recent_blockhash: [0u8; 32],
-            instructions: vec![CompiledInstruction {
-                program_id_index: 1,
-                accounts: vec![0],
-                data: vec![],
-            }],
-            address_table_lookups: Vec::new(),
-        });
-        let mut transaction = VersionedTransaction::new(message);
+    fn decode_v0() {
+        let tx = decode_mayan_tx();
+        assert!(matches!(tx, VersionedTransaction::V0 { .. }));
+        assert_eq!(tx.signatures().len(), 1);
+    }
 
-        // Test initial state
-        match &transaction {
-            VersionedTransaction::V0 { signatures, .. } => {
-                assert_eq!(signatures.len(), 0);
-            }
-            _ => panic!("Expected V0 transaction"),
-        }
-        assert_eq!(transaction.num_required_signatures(), 1);
-        assert_eq!(transaction.num_readonly_signed_accounts(), 0);
-        assert_eq!(transaction.num_readonly_unsigned_accounts(), 1);
+    #[test]
+    fn signatures_accessors() {
+        let mut tx = decode_legacy_tx();
+        let original_sig = tx.signatures()[0];
 
-        // Test adding signature
-        let signature = SignatureBytes::new([0; 64]);
-        transaction.add_signature(signature);
-        match &transaction {
-            VersionedTransaction::V0 { signatures, .. } => {
-                assert_eq!(signatures.len(), 1);
-            }
-            _ => panic!("Expected V0 transaction"),
-        }
+        tx.signatures_mut()[0] = SignatureBytes::new([42; 64]);
+        assert_eq!(tx.signatures()[0], SignatureBytes::new([42; 64]));
+        assert_ne!(tx.signatures()[0], original_sig);
+    }
+
+    #[test]
+    fn get_compute_unit_price_from_legacy() {
+        assert_eq!(decode_legacy_tx().get_compute_unit_price(), Some(70_000));
+    }
+
+    #[test]
+    fn get_compute_unit_price_from_v0() {
+        assert_eq!(decode_mayan_tx().get_compute_unit_price(), Some(71_428));
+    }
+
+    #[test]
+    fn set_compute_unit_price_legacy() {
+        let mut tx = decode_legacy_tx();
+        assert_eq!(tx.set_compute_unit_price(999_999).unwrap(), true);
+        assert_eq!(tx.get_compute_unit_price(), Some(999_999));
+    }
+
+    #[test]
+    fn get_compute_unit_limit_from_legacy() {
+        assert_eq!(decode_legacy_tx().get_compute_unit_limit(), Some(420_000));
+    }
+
+    #[test]
+    fn get_compute_unit_limit_from_v0() {
+        assert_eq!(decode_mayan_tx().get_compute_unit_limit(), Some(475_676));
+    }
+
+    #[test]
+    fn set_compute_unit_limit_legacy() {
+        let mut tx = decode_legacy_tx();
+        assert_eq!(tx.set_compute_unit_limit(500_000).unwrap(), true);
+        assert_eq!(tx.get_compute_unit_limit(), Some(500_000));
+    }
+
+    #[test]
+    fn add_instruction_appends_to_legacy() {
+        let mut tx = decode_legacy_tx();
+        let initial_ix_count = tx.instructions().len();
+        let price_before = tx.get_compute_unit_price().unwrap();
+
+        let from = tx.account_keys()[0];
+        let to = Pubkey::new([99; 32]);
+        tx.add_instruction(system::transfer(&from, &to, 5000)).unwrap();
+
+        assert_eq!(tx.instructions().len(), initial_ix_count + 1);
+        assert!(tx.account_keys().contains(&to));
+        assert_eq!(tx.get_compute_unit_price(), Some(price_before));
+    }
+
+    #[test]
+    fn add_instruction_errors_on_v0() {
+        let mut tx = decode_mayan_tx();
+        let from = tx.account_keys()[0];
+        let to = Pubkey::new([2; 32]);
+        assert!(tx.add_instruction(system::transfer(&from, &to, 100)).is_err());
+    }
+
+    #[test]
+    fn serialize_roundtrip_legacy() {
+        let data = STANDARD.decode(LEGACY_TX).unwrap();
+        let tx = VersionedTransaction::deserialize_with_version(&data).unwrap();
+
+        let reserialized = tx.serialize().unwrap();
+        assert_eq!(reserialized, data, "byte-exact roundtrip failed");
+
+        let tx2 = VersionedTransaction::deserialize_with_version(&reserialized).unwrap();
+        assert!(matches!(tx2, VersionedTransaction::Legacy { .. }));
+        assert_eq!(tx2.get_compute_unit_price(), Some(70_000));
+        assert_eq!(tx2.get_compute_unit_limit(), Some(420_000));
+    }
+
+    #[test]
+    fn serialize_roundtrip_v0() {
+        let data = STANDARD.decode(MAYAN_V0_TX).unwrap();
+        let tx = VersionedTransaction::deserialize_with_version(&data).unwrap();
+
+        let reserialized = tx.serialize().unwrap();
+        assert_eq!(reserialized, data, "byte-exact roundtrip failed");
+
+        let tx2 = VersionedTransaction::deserialize_with_version(&reserialized).unwrap();
+        assert!(matches!(tx2, VersionedTransaction::V0 { .. }));
+        assert_eq!(tx2.get_compute_unit_price(), Some(71_428));
+        assert_eq!(tx2.get_compute_unit_limit(), Some(475_676));
+    }
+
+    #[test]
+    fn sign_and_roundtrip() {
+        let mut tx = decode_legacy_tx();
+        let private_key = [1u8; 32];
+
+        let message_bytes = tx.serialize_message().unwrap();
+        let sig = sign_message(&private_key, &message_bytes).unwrap();
+        tx.signatures_mut()[0] = sig;
+
+        let bytes = tx.serialize().unwrap();
+        let deserialized = VersionedTransaction::deserialize_with_version(&bytes).unwrap();
+        assert_eq!(deserialized.signatures()[0], sig);
+        assert_ne!(deserialized.signatures()[0], SignatureBytes::default());
     }
 }

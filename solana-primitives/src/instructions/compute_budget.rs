@@ -44,13 +44,13 @@ impl ComputeBudgetInstruction {
                 data.push(1);
                 data.extend_from_slice(&bytes.to_le_bytes());
             }
-            Self::SetComputeUnitPrice { micro_lamports } => {
-                data.push(2);
-                data.extend_from_slice(&micro_lamports.to_le_bytes());
-            }
             Self::SetComputeUnitLimit { units } => {
-                data.push(3);
+                data.push(2);
                 data.extend_from_slice(&units.to_le_bytes());
+            }
+            Self::SetComputeUnitPrice { micro_lamports } => {
+                data.push(3);
+                data.extend_from_slice(&micro_lamports.to_le_bytes());
             }
         }
         data
@@ -94,5 +94,54 @@ pub fn set_compute_unit_limit(units: u32) -> Instruction {
         program_id: Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap(),
         accounts: vec![],
         data: ComputeBudgetInstruction::SetComputeUnitLimit { units }.serialize(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_compute_unit_limit_uses_discriminant_2() {
+        let ix = ComputeBudgetInstruction::SetComputeUnitLimit { units: 200_000 };
+        let data = ix.serialize();
+        assert_eq!(data[0], 2);
+        assert_eq!(data.len(), 5); // 1 discriminant + 4 u32
+        let units = u32::from_le_bytes(data[1..5].try_into().unwrap());
+        assert_eq!(units, 200_000);
+    }
+
+    #[test]
+    fn set_compute_unit_price_uses_discriminant_3() {
+        let ix = ComputeBudgetInstruction::SetComputeUnitPrice {
+            micro_lamports: 50_000,
+        };
+        let data = ix.serialize();
+        assert_eq!(data[0], 3);
+        assert_eq!(data.len(), 9); // 1 discriminant + 8 u64
+        let price = u64::from_le_bytes(data[1..9].try_into().unwrap());
+        assert_eq!(price, 50_000);
+    }
+
+    #[test]
+    fn helper_functions_produce_correct_data() {
+        let price_ix = set_compute_unit_price(12345);
+        assert_eq!(price_ix.data[0], 3);
+        assert_eq!(
+            u64::from_le_bytes(price_ix.data[1..9].try_into().unwrap()),
+            12345
+        );
+
+        let limit_ix = set_compute_unit_limit(400_000);
+        assert_eq!(limit_ix.data[0], 2);
+        assert_eq!(
+            u32::from_le_bytes(limit_ix.data[1..5].try_into().unwrap()),
+            400_000
+        );
+
+        // Both should target the compute budget program
+        let cb_program = Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap();
+        assert_eq!(price_ix.program_id, cb_program);
+        assert_eq!(limit_ix.program_id, cb_program);
     }
 }
