@@ -24,7 +24,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-solana-primitives = "0.2.0"
+solana-primitives = "0.2.3"
 ```
 
 ### Quick Start
