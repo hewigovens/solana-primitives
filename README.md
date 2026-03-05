@@ -69,6 +69,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Advanced Usage
 
+#### Versioned (V0) Transactions with Lookup Tables
+
+```rust
+use solana_primitives::{
+    AddressLookupTableAccount, Pubkey, TransactionBuilder,
+    instructions::system::transfer,
+};
+
+let fee_payer = Pubkey::new([1u8; 32]);
+let recipient = Pubkey::new([2u8; 32]);
+let looked_up = Pubkey::new([3u8; 32]);
+let recent_blockhash = [9u8; 32];
+
+let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+tx_builder.add_instructions(vec![transfer(&fee_payer, &recipient, 1_000)]);
+let address_lookup_tables = vec![AddressLookupTableAccount::new(
+    Pubkey::new([4u8; 32]),
+    vec![looked_up],
+)];
+
+let tx = tx_builder.build_v0(&address_lookup_tables)?;
+let wire_bytes = tx.serialize()?;
+```
+
 #### Program Derived Addresses (PDAs)
 
 ```rust
@@ -81,7 +105,6 @@ let seed_refs: Vec<&[u8]> = seeds.iter().map(|s| s.as_ref()).collect();
 let (pda, bump) = find_program_address(&program_id, &seed_refs)?;
 println!("PDA: {}, Bump: {}", pda.to_base58(), bump);
 ```
-
 
 ### Error Handling
 

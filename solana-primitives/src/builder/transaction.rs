@@ -1,8 +1,9 @@
 use crate::{
-    AccountMeta, CompiledInstruction, Instruction, Message, MessageHeader, Pubkey, Result,
-    SignatureBytes, Transaction,
+    AccountMeta, AddressLookupTableAccount, CompiledInstruction, Instruction, Message,
+    MessageAddressTableLookup, MessageHeader, Pubkey, Result, SignatureBytes, SolanaError,
+    Transaction, VersionedMessageV0, VersionedTransaction,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A builder for constructing Solana transactions
 #[derive(Debug)]
@@ -62,6 +63,17 @@ impl TransactionBuilder {
                 .or_insert_with(|| account_meta.clone());
         }
         self.instructions.push(instruction);
+        self
+    }
+
+    /// Add multiple instructions to the transaction.
+    pub fn add_instructions<I>(&mut self, instructions: I) -> &mut Self
+    where
+        I: IntoIterator<Item = Instruction>,
+    {
+        for instruction in instructions {
+            self.add_instruction(instruction);
+        }
         self
     }
 
@@ -198,5 +210,201 @@ impl TransactionBuilder {
             signatures,
             message,
         })
+    }
+
+    /// Build a V0 versioned transaction.
+    pub fn build_v0(
+        self,
+        address_lookup_tables: &[AddressLookupTableAccount],
+    ) -> Result<VersionedTransaction> {
+        let mut lookup_map: HashMap<Pubkey, (usize, u8)> = HashMap::new();
+        for (table_index, table) in address_lookup_tables.iter().enumerate().rev() {
+            for (entry_index, address) in table.addresses.iter().enumerate() {
+                if let Ok(entry_index_u8) = u8::try_from(entry_index) {
+                    lookup_map.insert(*address, (table_index, entry_index_u8));
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let program_ids: HashSet<Pubkey> = self
+            .instructions
+            .iter()
+            .map(|instruction| instruction.program_id)
+            .collect();
+
+        let mut flags: HashMap<Pubkey, (bool, bool)> = HashMap::new();
+        let mut order: Vec<Pubkey> = Vec::new();
+        let mut merge = |pubkey: Pubkey, is_signer: bool, is_writable: bool| {
+            flags
+                .entry(pubkey)
+                .and_modify(|(existing_signer, existing_writable)| {
+                    *existing_signer |= is_signer;
+                    *existing_writable |= is_writable;
+                })
+                .or_insert_with(|| {
+                    order.push(pubkey);
+                    (is_signer, is_writable)
+                });
+        };
+
+        merge(self.fee_payer, true, true);
+        for instruction in &self.instructions {
+            merge(instruction.program_id, false, false);
+            for account_meta in &instruction.accounts {
+                merge(
+                    account_meta.pubkey,
+                    account_meta.is_signer,
+                    account_meta.is_writable,
+                );
+            }
+        }
+
+        let mut static_keys: [Vec<Pubkey>; 4] = Default::default();
+        let mut lookup_writable: Vec<Vec<(Pubkey, u8)>> =
+            vec![Vec::new(); address_lookup_tables.len()];
+        let mut lookup_readonly: Vec<Vec<(Pubkey, u8)>> =
+            vec![Vec::new(); address_lookup_tables.len()];
+
+        for pubkey in &order {
+            let (is_signer, is_writable) = flags
+                .get(pubkey)
+                .copied()
+                .ok_or(SolanaError::InvalidMessage)?;
+
+            if is_signer || program_ids.contains(pubkey) || !lookup_map.contains_key(pubkey) {
+                let bucket = match (is_signer, is_writable) {
+                    (true, true) => 0,
+                    (true, false) => 1,
+                    (false, true) => 2,
+                    (false, false) => 3,
+                };
+                static_keys[bucket].push(*pubkey);
+            } else {
+                let (table_index, entry_index) = lookup_map
+                    .get(pubkey)
+                    .copied()
+                    .ok_or(SolanaError::InvalidMessage)?;
+                if is_writable {
+                    lookup_writable[table_index].push((*pubkey, entry_index));
+                } else {
+                    lookup_readonly[table_index].push((*pubkey, entry_index));
+                }
+            }
+        }
+
+        let account_keys: Vec<Pubkey> = static_keys
+            .iter()
+            .flat_map(|bucket| bucket.iter().copied())
+            .collect();
+
+        if account_keys.len() > u8::MAX as usize {
+            return Err(SolanaError::InvalidMessage);
+        }
+
+        let header = MessageHeader {
+            num_required_signatures: (static_keys[0].len() + static_keys[1].len()) as u8,
+            num_readonly_signed_accounts: static_keys[1].len() as u8,
+            num_readonly_unsigned_accounts: static_keys[3].len() as u8,
+        };
+
+        let mut virtual_index_map: HashMap<Pubkey, u8> = HashMap::new();
+        let mut next_virtual_index = account_keys.len();
+        for (pubkey, _) in lookup_writable
+            .iter()
+            .flat_map(|entries| entries.iter())
+            .chain(lookup_readonly.iter().flat_map(|entries| entries.iter()))
+        {
+            let virtual_index =
+                u8::try_from(next_virtual_index).map_err(|_| SolanaError::InvalidMessage)?;
+            virtual_index_map.insert(*pubkey, virtual_index);
+            next_virtual_index += 1;
+        }
+
+        let address_table_lookups: Vec<MessageAddressTableLookup> = address_lookup_tables
+            .iter()
+            .enumerate()
+            .filter_map(|(table_index, table)| {
+                let writable_indexes: Vec<u8> = lookup_writable[table_index]
+                    .iter()
+                    .map(|(_, entry_index)| *entry_index)
+                    .collect();
+                let readonly_indexes: Vec<u8> = lookup_readonly[table_index]
+                    .iter()
+                    .map(|(_, entry_index)| *entry_index)
+                    .collect();
+
+                if writable_indexes.is_empty() && readonly_indexes.is_empty() {
+                    return None;
+                }
+
+                Some(MessageAddressTableLookup::new(
+                    table.key,
+                    writable_indexes,
+                    readonly_indexes,
+                ))
+            })
+            .collect();
+
+        let static_index_map: HashMap<Pubkey, u8> = account_keys
+            .iter()
+            .enumerate()
+            .map(|(index, pubkey)| (*pubkey, index as u8))
+            .collect();
+
+        let compiled_instructions: Vec<CompiledInstruction> = self
+            .instructions
+            .iter()
+            .map(|instruction| {
+                let program_id_index = static_index_map
+                    .get(&instruction.program_id)
+                    .copied()
+                    .ok_or(SolanaError::InvalidMessage)?;
+
+                let accounts = instruction
+                    .accounts
+                    .iter()
+                    .map(|account_meta| {
+                        static_index_map
+                            .get(&account_meta.pubkey)
+                            .copied()
+                            .or_else(|| virtual_index_map.get(&account_meta.pubkey).copied())
+                            .ok_or(SolanaError::InvalidMessage)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(CompiledInstruction {
+                    program_id_index,
+                    accounts,
+                    data: instruction.data.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let signatures = vec![SignatureBytes::default(); header.num_required_signatures as usize];
+
+        Ok(VersionedTransaction::V0 {
+            signatures,
+            message: VersionedMessageV0 {
+                header,
+                account_keys,
+                recent_blockhash: self.recent_blockhash,
+                instructions: compiled_instructions,
+                address_table_lookups,
+            },
+        })
+    }
+
+    /// One-shot helper for compiling a V0 transaction.
+    pub fn build_v0_transaction(
+        fee_payer: Pubkey,
+        recent_blockhash: [u8; 32],
+        instructions: &[Instruction],
+        address_lookup_tables: &[AddressLookupTableAccount],
+    ) -> Result<VersionedTransaction> {
+        let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+        builder.add_instructions(instructions.iter().cloned());
+        builder.build_v0(address_lookup_tables)
     }
 }

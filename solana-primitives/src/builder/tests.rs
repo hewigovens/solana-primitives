@@ -2,9 +2,10 @@ use crate::Pubkey;
 use crate::builder::{InstructionBuilder, TransactionBuilder};
 use crate::instructions::{
     program_ids::{system_program, token_program},
-    system::create_account,
+    system::{create_account, transfer},
     token::transfer_checked,
 };
+use crate::types::AddressLookupTableAccount;
 use crate::types::VersionedTransaction;
 use crate::types::instruction::AccountMeta;
 use base64::Engine;
@@ -217,4 +218,94 @@ fn test_complex_transaction() {
     // we'll at least check that we can access the message
     let message_data = &transaction.message;
     assert!(!message_data.account_keys.is_empty());
+}
+
+#[test]
+fn test_versioned_transaction_builder_without_lookup_tables() {
+    let fee_payer = payer_pubkey();
+    let recipient = random_pubkey();
+    let recent_blockhash = test_blockhash();
+
+    let transfer_ix = transfer(&fee_payer, &recipient, 123);
+
+    let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+    builder.add_instruction(transfer_ix);
+
+    let transaction = builder.build_v0(&[]).unwrap();
+    let wire_bytes = transaction.serialize().unwrap();
+    let parsed = VersionedTransaction::deserialize_with_version(&wire_bytes).unwrap();
+
+    match parsed {
+        VersionedTransaction::V0 {
+            signatures,
+            message,
+        } => {
+            assert_eq!(signatures.len(), 1);
+            assert_eq!(message.header.num_required_signatures, 1);
+            assert!(message.address_table_lookups.is_empty());
+            assert_eq!(message.instructions.len(), 1);
+        }
+        _ => panic!("expected v0 transaction"),
+    }
+}
+
+#[test]
+fn test_versioned_transaction_builder_with_lookup_table() {
+    let fee_payer = payer_pubkey();
+    let recent_blockhash = test_blockhash();
+    let looked_up_account = Pubkey::new([42u8; 32]);
+    let program_id = Pubkey::new([7u8; 32]);
+
+    let instruction = InstructionBuilder::new(program_id)
+        .account(fee_payer, true, true)
+        .account(looked_up_account, false, true)
+        .data(vec![1, 2, 3])
+        .build();
+
+    let lookup_table = AddressLookupTableAccount::new(
+        Pubkey::new([99u8; 32]),
+        vec![looked_up_account, Pubkey::new([11u8; 32])],
+    );
+
+    let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+    builder.add_instruction(instruction);
+
+    let transaction = builder.build_v0(&[lookup_table]).unwrap();
+    let wire_bytes = transaction.serialize().unwrap();
+    let parsed = VersionedTransaction::deserialize_with_version(&wire_bytes).unwrap();
+
+    match parsed {
+        VersionedTransaction::V0 {
+            signatures,
+            message,
+        } => {
+            assert_eq!(signatures.len(), 1);
+            assert_eq!(message.address_table_lookups.len(), 1);
+            assert_eq!(message.address_table_lookups[0].writable_indexes, vec![0]);
+            assert_eq!(
+                message.address_table_lookups[0].readonly_indexes,
+                Vec::<u8>::new()
+            );
+            assert!(!message.account_keys.contains(&looked_up_account));
+            assert_eq!(message.instructions.len(), 1);
+            assert_eq!(message.instructions[0].data, vec![1, 2, 3]);
+        }
+        _ => panic!("expected v0 transaction"),
+    }
+}
+
+#[test]
+fn test_add_instructions_helper() {
+    let fee_payer = payer_pubkey();
+    let recent_blockhash = test_blockhash();
+    let recipient = random_pubkey();
+
+    let ix1 = transfer(&fee_payer, &recipient, 1);
+    let ix2 = transfer(&fee_payer, &recipient, 2);
+
+    let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+    builder.add_instructions(vec![ix1, ix2]);
+
+    let tx = builder.build().unwrap();
+    assert_eq!(tx.message.instructions.len(), 2);
 }
