@@ -297,18 +297,15 @@ impl TransactionBuilder {
         let mut account_keys = Vec::with_capacity(static_keys.iter().map(Vec::len).sum());
         account_keys.push(self.fee_payer);
 
-        let mut other_writable_signers: Vec<Pubkey> = static_keys[0]
-            .iter()
-            .copied()
-            .filter(|pubkey| *pubkey != self.fee_payer)
-            .collect();
-        other_writable_signers.sort_unstable();
-        account_keys.extend(other_writable_signers);
+        account_keys.extend(
+            static_keys[0]
+                .iter()
+                .copied()
+                .filter(|pubkey| *pubkey != self.fee_payer),
+        );
 
         for bucket in &static_keys[1..] {
-            let mut sorted_bucket = bucket.clone();
-            sorted_bucket.sort_unstable();
-            account_keys.extend(sorted_bucket);
+            account_keys.extend(bucket.iter().copied());
         }
 
         if account_keys.len() > u8::MAX as usize {
