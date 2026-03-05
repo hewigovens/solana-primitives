@@ -294,10 +294,22 @@ impl TransactionBuilder {
             }
         }
 
-        let account_keys: Vec<Pubkey> = static_keys
+        let mut account_keys = Vec::with_capacity(static_keys.iter().map(Vec::len).sum());
+        account_keys.push(self.fee_payer);
+
+        let mut other_writable_signers: Vec<Pubkey> = static_keys[0]
             .iter()
-            .flat_map(|bucket| bucket.iter().copied())
+            .copied()
+            .filter(|pubkey| *pubkey != self.fee_payer)
             .collect();
+        other_writable_signers.sort_unstable();
+        account_keys.extend(other_writable_signers);
+
+        for bucket in &static_keys[1..] {
+            let mut sorted_bucket = bucket.clone();
+            sorted_bucket.sort_unstable();
+            account_keys.extend(sorted_bucket);
+        }
 
         if account_keys.len() > u8::MAX as usize {
             return Err(SolanaError::InvalidMessage);

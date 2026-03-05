@@ -1,5 +1,5 @@
-use crate::instructions::program_ids::COMPUTE_BUDGET_PROGRAM_ID;
-use crate::types::{Instruction, Pubkey};
+use crate::instructions::program_ids::compute_budget_program;
+use crate::types::Instruction;
 
 /// Compute budget instruction discriminant for setting compute unit limit.
 pub const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
@@ -65,7 +65,7 @@ impl ComputeBudgetInstruction {
 /// Request a specific transaction-wide compute unit limit
 pub fn request_units(units: u32, additional_fee: u32) -> Instruction {
     Instruction {
-        program_id: Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap(),
+        program_id: compute_budget_program(),
         accounts: vec![],
         data: ComputeBudgetInstruction::RequestUnits {
             units,
@@ -78,7 +78,7 @@ pub fn request_units(units: u32, additional_fee: u32) -> Instruction {
 /// Request a specific heap frame size
 pub fn request_heap_frame(bytes: u32) -> Instruction {
     Instruction {
-        program_id: Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap(),
+        program_id: compute_budget_program(),
         accounts: vec![],
         data: ComputeBudgetInstruction::RequestHeapFrame { bytes }.serialize(),
     }
@@ -87,7 +87,7 @@ pub fn request_heap_frame(bytes: u32) -> Instruction {
 /// Set a specific compute unit price
 pub fn set_compute_unit_price(micro_lamports: u64) -> Instruction {
     Instruction {
-        program_id: Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap(),
+        program_id: compute_budget_program(),
         accounts: vec![],
         data: ComputeBudgetInstruction::SetComputeUnitPrice { micro_lamports }.serialize(),
     }
@@ -96,7 +96,7 @@ pub fn set_compute_unit_price(micro_lamports: u64) -> Instruction {
 /// Set a specific compute unit limit
 pub fn set_compute_unit_limit(units: u32) -> Instruction {
     Instruction {
-        program_id: Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap(),
+        program_id: compute_budget_program(),
         accounts: vec![],
         data: ComputeBudgetInstruction::SetComputeUnitLimit { units }.serialize(),
     }
@@ -126,9 +126,9 @@ pub fn parse_compute_unit_price_data(data: &[u8]) -> Option<u64> {
 
 /// Get the first compute unit limit present in a list of instructions.
 pub fn get_compute_unit_limit(instructions: &[Instruction]) -> Option<u32> {
-    let compute_budget_program = Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap();
+    let compute_budget_program_id = compute_budget_program();
     instructions.iter().find_map(|instruction| {
-        if instruction.program_id == compute_budget_program {
+        if instruction.program_id == compute_budget_program_id {
             parse_compute_unit_limit_data(&instruction.data)
         } else {
             None
@@ -139,9 +139,9 @@ pub fn get_compute_unit_limit(instructions: &[Instruction]) -> Option<u32> {
 /// Ensure a compute unit price instruction exists at the beginning of the instruction list.
 /// Returns true when the instruction was inserted and false when it already existed.
 pub fn ensure_compute_unit_price(instructions: &mut Vec<Instruction>, micro_lamports: u64) -> bool {
-    let compute_budget_program = Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap();
+    let compute_budget_program_id = compute_budget_program();
     let has_price = instructions.iter().any(|instruction| {
-        instruction.program_id == compute_budget_program
+        instruction.program_id == compute_budget_program_id
             && parse_compute_unit_price_data(&instruction.data).is_some()
     });
 
@@ -158,6 +158,7 @@ mod tests {
     use super::*;
     use crate::instructions::program_ids::{compute_budget_program, system_program};
     use crate::instructions::system::transfer;
+    use crate::types::Pubkey;
 
     #[test]
     fn test_compute_budget_discriminants() {
