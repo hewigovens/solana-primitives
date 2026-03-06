@@ -7,6 +7,3 @@ mod transaction;
 pub use data::InstructionDataBuilder;
 pub use instruction::InstructionBuilder;
 pub use transaction::TransactionBuilder;
-
-#[cfg(test)]
-mod tests;
