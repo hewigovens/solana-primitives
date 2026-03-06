@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct Instruction {
     /// The program ID that will process this instruction
+    #[serde(alias = "programId")]
     pub program_id: Pubkey,
     /// The accounts that will be read from or written to
+    #[serde(alias = "keys")]
     pub accounts: Vec<AccountMeta>,
     /// The instruction data
     pub data: Vec<u8>,
@@ -17,48 +19,44 @@ pub struct Instruction {
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct AccountMeta {
     /// The account's public key
+    #[serde(alias = "publicKey")]
     pub pubkey: Pubkey,
     /// Whether the account is a signer
+    #[serde(alias = "isSigner")]
     pub is_signer: bool,
     /// Whether the account is writable
+    #[serde(alias = "isWritable")]
     pub is_writable: bool,
 }
 
 impl AccountMeta {
-    /// Create a new AccountMeta that is read-only
-    pub fn new_readonly(pubkey: Pubkey) -> Self {
+    /// Create a new AccountMeta with explicit signer/writable flags.
+    pub fn new(pubkey: Pubkey, is_signer: bool, is_writable: bool) -> Self {
         Self {
             pubkey,
-            is_signer: false,
-            is_writable: false,
+            is_signer,
+            is_writable,
         }
+    }
+
+    /// Create a new AccountMeta that is read-only
+    pub fn new_readonly(pubkey: Pubkey) -> Self {
+        Self::new(pubkey, false, false)
     }
 
     /// Create a new AccountMeta that is a signer
     pub fn new_signer(pubkey: Pubkey) -> Self {
-        Self {
-            pubkey,
-            is_signer: true,
-            is_writable: false,
-        }
+        Self::new(pubkey, true, false)
     }
 
     /// Create a new AccountMeta that is writable
     pub fn new_writable(pubkey: Pubkey) -> Self {
-        Self {
-            pubkey,
-            is_signer: false,
-            is_writable: true,
-        }
+        Self::new(pubkey, false, true)
     }
 
     /// Create a new AccountMeta that is both a signer and writable
     pub fn new_signer_writable(pubkey: Pubkey) -> Self {
-        Self {
-            pubkey,
-            is_signer: true,
-            is_writable: true,
-        }
+        Self::new(pubkey, true, true)
     }
 }
 
