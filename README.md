@@ -3,7 +3,7 @@
 [![CI](https://github.com/hewigovens/solana-primitives/actions/workflows/ci.yml/badge.svg)](https://github.com/hewigovens/solana-primitives/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/solana-primitives.svg)](https://crates.io/crates/solana-primitives)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hewigovens/solana-primitives)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A lightweight Rust crate providing fundamental Solana blockchain primitives for constructing and submitting transactions without requiring the full Solana SDK.
 
@@ -155,4 +155,4 @@ cargo run --example decode_tx
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[Apache-2.0](LICENSE)
