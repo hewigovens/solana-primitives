@@ -15,6 +15,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - name: Run lint
         run: just lint
