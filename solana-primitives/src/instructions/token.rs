@@ -1,4 +1,4 @@
-use crate::instructions::program_ids::{SYSVAR_RENT_ID, TOKEN_PROGRAM_ID};
+use crate::instructions::program_ids::{rent_sysvar, token_program};
 use crate::types::{AccountMeta, Instruction, Pubkey};
 
 /// Token program instruction types
@@ -250,10 +250,6 @@ impl From<&AuthorityType> for u8 {
     }
 }
 
-fn default_token_program_id() -> Pubkey {
-    Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
-}
-
 /// Create and initialize a token mint (defaults to the SPL Token program)
 pub fn initialize_mint(
     mint: &Pubkey,
@@ -266,7 +262,7 @@ pub fn initialize_mint(
         mint_authority,
         freeze_authority,
         decimals,
-        &default_token_program_id(),
+        &token_program(),
     )
 }
 
@@ -285,7 +281,7 @@ pub fn initialize_mint_with_program_id(
             is_writable: true,
         },
         AccountMeta {
-            pubkey: Pubkey::from_base58(SYSVAR_RENT_ID).unwrap(),
+            pubkey: rent_sysvar(),
             is_signer: false,
             is_writable: false,
         },
@@ -306,7 +302,7 @@ pub fn initialize_mint_with_program_id(
 
 /// Create and initialize a token account (defaults to the SPL Token program)
 pub fn initialize_account(account: &Pubkey, mint: &Pubkey, owner: &Pubkey) -> Instruction {
-    initialize_account_with_program_id(account, mint, owner, &default_token_program_id())
+    initialize_account_with_program_id(account, mint, owner, &token_program())
 }
 
 /// Create and initialize a token account using the provided token program
@@ -333,7 +329,7 @@ pub fn initialize_account_with_program_id(
             is_writable: false,
         },
         AccountMeta {
-            pubkey: Pubkey::from_base58(SYSVAR_RENT_ID).unwrap(),
+            pubkey: rent_sysvar(),
             is_signer: false,
             is_writable: false,
         },
@@ -350,13 +346,7 @@ pub fn initialize_account_with_program_id(
 
 /// Transfer tokens from one account to another (defaults to the SPL Token program)
 pub fn transfer(source: &Pubkey, destination: &Pubkey, owner: &Pubkey, amount: u64) -> Instruction {
-    transfer_with_program_id(
-        source,
-        destination,
-        owner,
-        amount,
-        &default_token_program_id(),
-    )
+    transfer_with_program_id(source, destination, owner, amount, &token_program())
 }
 
 /// Transfer tokens from one account to another using the provided token program
@@ -401,13 +391,7 @@ pub fn mint_to(
     authority: &Pubkey,
     amount: u64,
 ) -> Instruction {
-    mint_to_with_program_id(
-        mint,
-        destination,
-        authority,
-        amount,
-        &default_token_program_id(),
-    )
+    mint_to_with_program_id(mint, destination, authority, amount, &token_program())
 }
 
 /// Mint tokens to an account using the provided token program
@@ -447,13 +431,7 @@ pub fn mint_to_with_program_id(
 
 /// Burn tokens from an account (defaults to the SPL Token program)
 pub fn burn(account: &Pubkey, mint: &Pubkey, authority: &Pubkey, amount: u64) -> Instruction {
-    burn_with_program_id(
-        account,
-        mint,
-        authority,
-        amount,
-        &default_token_program_id(),
-    )
+    burn_with_program_id(account, mint, authority, amount, &token_program())
 }
 
 /// Burn tokens from an account using the provided token program
@@ -493,7 +471,7 @@ pub fn burn_with_program_id(
 
 /// Close a token account (defaults to the SPL Token program)
 pub fn close_account(account: &Pubkey, destination: &Pubkey, owner: &Pubkey) -> Instruction {
-    close_account_with_program_id(account, destination, owner, &default_token_program_id())
+    close_account_with_program_id(account, destination, owner, &token_program())
 }
 
 /// Close a token account using the provided token program
@@ -546,7 +524,7 @@ pub fn transfer_checked(
         owner,
         amount,
         decimals,
-        &default_token_program_id(),
+        &token_program(),
     )
 }
 
@@ -606,7 +584,7 @@ pub fn mint_to_checked(
         authority,
         amount,
         decimals,
-        &default_token_program_id(),
+        &token_program(),
     )
 }
 
@@ -654,14 +632,7 @@ pub fn burn_checked(
     amount: u64,
     decimals: u8,
 ) -> Instruction {
-    burn_checked_with_program_id(
-        account,
-        mint,
-        authority,
-        amount,
-        decimals,
-        &default_token_program_id(),
-    )
+    burn_checked_with_program_id(account, mint, authority, amount, decimals, &token_program())
 }
 
 /// Burn tokens from an account, asserting the token mint and decimals, using the provided token program
@@ -702,7 +673,7 @@ pub fn burn_checked_with_program_id(
 
 /// Sync native instruction (defaults to the SPL Token program)
 pub fn sync_native(account: &Pubkey) -> Instruction {
-    sync_native_with_program_id(account, &default_token_program_id())
+    sync_native_with_program_id(account, &token_program())
 }
 
 /// Sync native instruction using the provided token program
@@ -726,7 +697,9 @@ pub fn sync_native_with_program_id(account: &Pubkey, token_program_id: &Pubkey) 
 mod tests {
     use super::*;
     use crate::Pubkey;
-    use crate::instructions::program_ids::TOKEN_2022_PROGRAM_ID;
+    use crate::instructions::program_ids::{
+        SYSVAR_RENT_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    };
 
     // Use the same public keys as in the JavaScript test file
     fn mint_pubkey() -> Pubkey {

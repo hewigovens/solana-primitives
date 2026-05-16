@@ -1,5 +1,5 @@
 use crate::instructions::program_ids::{
-    ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, SYSVAR_RENT_ID, TOKEN_PROGRAM_ID,
+    associated_token_program, rent_sysvar, system_program, token_program,
 };
 use crate::types::{AccountMeta, Instruction, Pubkey, find_program_address};
 
@@ -14,7 +14,7 @@ pub fn create_associated_token_account(
     wallet_address: &Pubkey,
     token_mint_address: &Pubkey,
 ) -> Instruction {
-    let token_program_id = Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap();
+    let token_program_id = token_program();
     create_associated_token_account_with_program_id(
         payer,
         wallet_address,
@@ -121,7 +121,7 @@ fn create_associated_token_account_instruction(
         },
         // System program
         AccountMeta {
-            pubkey: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
+            pubkey: system_program(),
             is_signer: false,
             is_writable: false,
         },
@@ -133,14 +133,14 @@ fn create_associated_token_account_instruction(
         },
         // Rent sysvar
         AccountMeta {
-            pubkey: Pubkey::from_base58(SYSVAR_RENT_ID).unwrap(),
+            pubkey: rent_sysvar(),
             is_signer: false,
             is_writable: false,
         },
     ];
 
     Instruction {
-        program_id: Pubkey::from_base58(ASSOCIATED_TOKEN_PROGRAM_ID).unwrap(),
+        program_id: associated_token_program(),
         accounts: account_metas,
         data,
     }
@@ -151,7 +151,7 @@ pub fn get_associated_token_address(
     wallet_address: &Pubkey,
     token_mint_address: &Pubkey,
 ) -> Pubkey {
-    let token_program_id = Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap();
+    let token_program_id = token_program();
     get_associated_token_address_with_program_id(
         wallet_address,
         token_mint_address,
@@ -165,7 +165,7 @@ pub fn get_associated_token_address_with_program_id(
     token_mint_address: &Pubkey,
     token_program_id: &Pubkey,
 ) -> Pubkey {
-    let associated_token_program_id = Pubkey::from_base58(ASSOCIATED_TOKEN_PROGRAM_ID).unwrap();
+    let associated_token_program_id = associated_token_program();
 
     let seeds: [&[u8]; 3] = [
         wallet_address.as_bytes(),
@@ -182,7 +182,10 @@ pub fn get_associated_token_address_with_program_id(
 mod tests {
     use super::*;
     use crate::Pubkey;
-    use crate::instructions::program_ids::{SYSVAR_RENT_ID, TOKEN_2022_PROGRAM_ID};
+    use crate::instructions::program_ids::{
+        ASSOCIATED_TOKEN_PROGRAM_ID, SYSTEM_PROGRAM_ID, SYSVAR_RENT_ID, TOKEN_2022_PROGRAM_ID,
+        TOKEN_PROGRAM_ID,
+    };
 
     fn mint_pubkey() -> Pubkey {
         Pubkey::from_base58("7o36UsWR1JQLpZ9PE2gn9L4SQ69CNNiWAXd4Jt7rqz9Z").unwrap()

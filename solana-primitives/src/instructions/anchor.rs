@@ -2,7 +2,9 @@ use sha2::{Digest, Sha256};
 
 fn namespaced_discriminator(namespace: &str, name: &str) -> [u8; 8] {
     let mut hasher = Sha256::new();
-    hasher.update(format!("{namespace}:{name}").as_bytes());
+    hasher.update(namespace.as_bytes());
+    hasher.update(b":");
+    hasher.update(name.as_bytes());
     let hash = hasher.finalize();
     let mut data = [0u8; 8];
     data.copy_from_slice(&hash[..8]);
