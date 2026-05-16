@@ -319,16 +319,15 @@ impl TransactionBuilder {
         };
 
         let mut virtual_index_map: HashMap<Pubkey, u8> = HashMap::new();
-        let mut next_virtual_index = account_keys.len();
-        for (pubkey, _) in lookup_writable
-            .iter()
-            .flat_map(|entries| entries.iter())
-            .chain(lookup_readonly.iter().flat_map(|entries| entries.iter()))
-        {
+        for (next_virtual_index, (pubkey, _)) in (account_keys.len()..).zip(
+            lookup_writable
+                .iter()
+                .flat_map(|entries| entries.iter())
+                .chain(lookup_readonly.iter().flat_map(|entries| entries.iter())),
+        ) {
             let virtual_index =
                 u8::try_from(next_virtual_index).map_err(|_| SolanaError::InvalidMessage)?;
             virtual_index_map.insert(*pubkey, virtual_index);
-            next_virtual_index += 1;
         }
 
         let address_table_lookups: Vec<MessageAddressTableLookup> = address_lookup_tables
