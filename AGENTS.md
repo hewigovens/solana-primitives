@@ -86,3 +86,25 @@ This crate provides fundamental Solana blockchain primitives for constructing an
    - **Required**: Ensure all tests pass with `cargo test`
    - **Best Practice**: Use `just lint` and `just test` shortcuts when available
    - **Reason**: Maintains consistent code quality and prevents CI failures
+
+## Version Control: Jujutsu (jj)
+
+This repo uses [Jujutsu](https://jj-vcs.github.io/jj/) as the primary VCS, co-located with Git (the `.git` directory still exists, so `git` commands also work — but prefer `jj`).
+
+### Common commands
+
+- `jj st` — show working-copy status
+- `jj log` / `jj log -r '..@'` — show recent changes
+- `jj diff` — show working-copy diff
+- `jj new` — start a new change on top of `@`
+- `jj describe -m "..."` — set or amend the current change's message
+- `jj commit -m "..."` — describe the current change and start a new empty one
+- `jj squash` — fold the current change into its parent
+- `jj git push` — push changes to the Git remote
+- `jj git fetch` — pull updates from the Git remote
+
+### Workflow notes
+
+- jj has no staging area: every working-copy edit is part of the current change automatically.
+- Amending is cheap and non-destructive — `jj describe`/`jj squash` rewrite the current change, and jj keeps the old version in the op log (`jj op log` / `jj op restore` to undo).
+- For PRs, push the change with `jj git push -c @` (creates a Git branch from the current change) or push an existing branch with `jj git push --branch <name>`.

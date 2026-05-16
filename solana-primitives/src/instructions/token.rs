@@ -1,4 +1,4 @@
-use crate::instructions::program_ids::TOKEN_PROGRAM_ID;
+use crate::instructions::program_ids::{rent_sysvar, token_program};
 use crate::types::{AccountMeta, Instruction, Pubkey};
 
 /// Token program instruction types
@@ -250,12 +250,29 @@ impl From<&AuthorityType> for u8 {
     }
 }
 
-/// Create and initialize a token mint
+/// Create and initialize a token mint (defaults to the SPL Token program)
 pub fn initialize_mint(
     mint: &Pubkey,
     mint_authority: &Pubkey,
     freeze_authority: Option<&Pubkey>,
     decimals: u8,
+) -> Instruction {
+    initialize_mint_with_program_id(
+        mint,
+        mint_authority,
+        freeze_authority,
+        decimals,
+        &token_program(),
+    )
+}
+
+/// Create and initialize a token mint using the provided token program
+pub fn initialize_mint_with_program_id(
+    mint: &Pubkey,
+    mint_authority: &Pubkey,
+    freeze_authority: Option<&Pubkey>,
+    decimals: u8,
+    token_program_id: &Pubkey,
 ) -> Instruction {
     let account_metas = vec![
         AccountMeta {
@@ -264,7 +281,7 @@ pub fn initialize_mint(
             is_writable: true,
         },
         AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRent111111111111111111111111111111111").unwrap(),
+            pubkey: rent_sysvar(),
             is_signer: false,
             is_writable: false,
         },
@@ -277,14 +294,24 @@ pub fn initialize_mint(
     };
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Create and initialize a token account
+/// Create and initialize a token account (defaults to the SPL Token program)
 pub fn initialize_account(account: &Pubkey, mint: &Pubkey, owner: &Pubkey) -> Instruction {
+    initialize_account_with_program_id(account, mint, owner, &token_program())
+}
+
+/// Create and initialize a token account using the provided token program
+pub fn initialize_account_with_program_id(
+    account: &Pubkey,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    token_program_id: &Pubkey,
+) -> Instruction {
     let account_metas = vec![
         AccountMeta {
             pubkey: *account,
@@ -302,7 +329,7 @@ pub fn initialize_account(account: &Pubkey, mint: &Pubkey, owner: &Pubkey) -> In
             is_writable: false,
         },
         AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRent111111111111111111111111111111111").unwrap(),
+            pubkey: rent_sysvar(),
             is_signer: false,
             is_writable: false,
         },
@@ -311,14 +338,25 @@ pub fn initialize_account(account: &Pubkey, mint: &Pubkey, owner: &Pubkey) -> In
     let instruction = TokenInstruction::InitializeAccount;
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Transfer tokens from one account to another
+/// Transfer tokens from one account to another (defaults to the SPL Token program)
 pub fn transfer(source: &Pubkey, destination: &Pubkey, owner: &Pubkey, amount: u64) -> Instruction {
+    transfer_with_program_id(source, destination, owner, amount, &token_program())
+}
+
+/// Transfer tokens from one account to another using the provided token program
+pub fn transfer_with_program_id(
+    source: &Pubkey,
+    destination: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    token_program_id: &Pubkey,
+) -> Instruction {
     let account_metas = vec![
         AccountMeta {
             pubkey: *source,
@@ -340,18 +378,29 @@ pub fn transfer(source: &Pubkey, destination: &Pubkey, owner: &Pubkey, amount: u
     let instruction = TokenInstruction::Transfer { amount };
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Mint tokens to an account
+/// Mint tokens to an account (defaults to the SPL Token program)
 pub fn mint_to(
     mint: &Pubkey,
     destination: &Pubkey,
     authority: &Pubkey,
     amount: u64,
+) -> Instruction {
+    mint_to_with_program_id(mint, destination, authority, amount, &token_program())
+}
+
+/// Mint tokens to an account using the provided token program
+pub fn mint_to_with_program_id(
+    mint: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    token_program_id: &Pubkey,
 ) -> Instruction {
     let account_metas = vec![
         AccountMeta {
@@ -374,14 +423,25 @@ pub fn mint_to(
     let instruction = TokenInstruction::MintTo { amount };
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Burn tokens from an account
+/// Burn tokens from an account (defaults to the SPL Token program)
 pub fn burn(account: &Pubkey, mint: &Pubkey, authority: &Pubkey, amount: u64) -> Instruction {
+    burn_with_program_id(account, mint, authority, amount, &token_program())
+}
+
+/// Burn tokens from an account using the provided token program
+pub fn burn_with_program_id(
+    account: &Pubkey,
+    mint: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    token_program_id: &Pubkey,
+) -> Instruction {
     let account_metas = vec![
         AccountMeta {
             pubkey: *account,
@@ -403,14 +463,24 @@ pub fn burn(account: &Pubkey, mint: &Pubkey, authority: &Pubkey, amount: u64) ->
     let instruction = TokenInstruction::Burn { amount };
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Close a token account
+/// Close a token account (defaults to the SPL Token program)
 pub fn close_account(account: &Pubkey, destination: &Pubkey, owner: &Pubkey) -> Instruction {
+    close_account_with_program_id(account, destination, owner, &token_program())
+}
+
+/// Close a token account using the provided token program
+pub fn close_account_with_program_id(
+    account: &Pubkey,
+    destination: &Pubkey,
+    owner: &Pubkey,
+    token_program_id: &Pubkey,
+) -> Instruction {
     let account_metas = vec![
         AccountMeta {
             pubkey: *account,
@@ -432,13 +502,13 @@ pub fn close_account(account: &Pubkey, destination: &Pubkey, owner: &Pubkey) -> 
     let instruction = TokenInstruction::CloseAccount;
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts: account_metas,
         data: instruction.serialize(),
     }
 }
 
-/// Transfer tokens, asserting the token mint and decimals
+/// Transfer tokens, asserting the token mint and decimals (defaults to the SPL Token program)
 pub fn transfer_checked(
     source: &Pubkey,
     mint: &Pubkey,
@@ -446,6 +516,27 @@ pub fn transfer_checked(
     owner: &Pubkey,
     amount: u64,
     decimals: u8,
+) -> Instruction {
+    transfer_checked_with_program_id(
+        source,
+        mint,
+        destination,
+        owner,
+        amount,
+        decimals,
+        &token_program(),
+    )
+}
+
+/// Transfer tokens, asserting the token mint and decimals, using the provided token program
+pub fn transfer_checked_with_program_id(
+    source: &Pubkey,
+    mint: &Pubkey,
+    destination: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    decimals: u8,
+    token_program_id: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta {
@@ -473,19 +564,38 @@ pub fn transfer_checked(
     let data = TokenInstruction::TransferChecked { amount, decimals }.serialize();
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts,
         data,
     }
 }
 
-/// Mint new tokens to an account, asserting the token mint and decimals
+/// Mint new tokens to an account, asserting the token mint and decimals (defaults to the SPL Token program)
 pub fn mint_to_checked(
     mint: &Pubkey,
     destination: &Pubkey,
     authority: &Pubkey,
     amount: u64,
     decimals: u8,
+) -> Instruction {
+    mint_to_checked_with_program_id(
+        mint,
+        destination,
+        authority,
+        amount,
+        decimals,
+        &token_program(),
+    )
+}
+
+/// Mint new tokens to an account, asserting the token mint and decimals, using the provided token program
+pub fn mint_to_checked_with_program_id(
+    mint: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    decimals: u8,
+    token_program_id: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta {
@@ -508,19 +618,31 @@ pub fn mint_to_checked(
     let data = TokenInstruction::MintToChecked { amount, decimals }.serialize();
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts,
         data,
     }
 }
 
-/// Burn tokens from an account, asserting the token mint and decimals
+/// Burn tokens from an account, asserting the token mint and decimals (defaults to the SPL Token program)
 pub fn burn_checked(
     account: &Pubkey,
     mint: &Pubkey,
     authority: &Pubkey,
     amount: u64,
     decimals: u8,
+) -> Instruction {
+    burn_checked_with_program_id(account, mint, authority, amount, decimals, &token_program())
+}
+
+/// Burn tokens from an account, asserting the token mint and decimals, using the provided token program
+pub fn burn_checked_with_program_id(
+    account: &Pubkey,
+    mint: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    decimals: u8,
+    token_program_id: &Pubkey,
 ) -> Instruction {
     let accounts = vec![
         AccountMeta {
@@ -543,14 +665,19 @@ pub fn burn_checked(
     let data = TokenInstruction::BurnChecked { amount, decimals }.serialize();
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts,
         data,
     }
 }
 
-/// Sync native instruction
+/// Sync native instruction (defaults to the SPL Token program)
 pub fn sync_native(account: &Pubkey) -> Instruction {
+    sync_native_with_program_id(account, &token_program())
+}
+
+/// Sync native instruction using the provided token program
+pub fn sync_native_with_program_id(account: &Pubkey, token_program_id: &Pubkey) -> Instruction {
     let accounts = vec![AccountMeta {
         pubkey: *account,
         is_signer: false,
@@ -560,7 +687,7 @@ pub fn sync_native(account: &Pubkey) -> Instruction {
     let data = TokenInstruction::SyncNative.serialize();
 
     Instruction {
-        program_id: Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap(),
+        program_id: *token_program_id,
         accounts,
         data,
     }
@@ -570,6 +697,9 @@ pub fn sync_native(account: &Pubkey) -> Instruction {
 mod tests {
     use super::*;
     use crate::Pubkey;
+    use crate::instructions::program_ids::{
+        SYSVAR_RENT_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    };
 
     // Use the same public keys as in the JavaScript test file
     fn mint_pubkey() -> Pubkey {
@@ -616,6 +746,12 @@ mod tests {
             data
         };
         assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction =
+            transfer_with_program_id(&source, &destination, &owner, amount, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
     }
 
     #[test]
@@ -651,6 +787,19 @@ mod tests {
             data
         };
         assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction = transfer_checked_with_program_id(
+            &source,
+            &mint,
+            &destination,
+            &owner,
+            amount,
+            decimals,
+            &token_2022_program,
+        );
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
     }
 
     #[test]
@@ -682,6 +831,18 @@ mod tests {
             data.push(decimals);
             data
         };
+        assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction = mint_to_checked_with_program_id(
+            &mint,
+            &token,
+            &mint_authority,
+            amount,
+            decimals,
+            &token_2022_program,
+        );
+        assert_eq!(instruction.program_id, token_2022_program);
         assert_eq!(instruction.data, expected_data);
     }
 
@@ -715,6 +876,18 @@ mod tests {
             data
         };
         assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction = burn_checked_with_program_id(
+            &account,
+            &mint,
+            &authority,
+            amount,
+            decimals,
+            &token_2022_program,
+        );
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
     }
 
     #[test]
@@ -733,5 +906,174 @@ mod tests {
 
         // Check data - should be [17] (sync native instruction)
         assert_eq!(instruction.data, vec![17]);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction = sync_native_with_program_id(&account, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.accounts.len(), 1);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.data, vec![17]);
+    }
+
+    #[test]
+    fn test_initialize_mint() {
+        let mint = mint_pubkey();
+        let mint_authority = authority_pubkey();
+        let decimals = 9u8;
+        let rent = Pubkey::from_base58(SYSVAR_RENT_ID).unwrap();
+
+        let instruction = initialize_mint(&mint, &mint_authority, None, decimals);
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 2);
+        assert_eq!(instruction.accounts[0].pubkey, mint);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, rent);
+
+        let expected_data = {
+            let mut data = vec![0, decimals];
+            data.extend_from_slice(mint_authority.as_bytes());
+            data.push(0); // no freeze authority
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction = initialize_mint_with_program_id(
+            &mint,
+            &mint_authority,
+            None,
+            decimals,
+            &token_2022_program,
+        );
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_initialize_account() {
+        let account = token_pubkey();
+        let mint = mint_pubkey();
+        let owner = authority_pubkey();
+
+        let instruction = initialize_account(&account, &mint, &owner);
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 4);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, mint);
+        assert_eq!(instruction.accounts[2].pubkey, owner);
+        assert_eq!(
+            instruction.accounts[3].pubkey,
+            Pubkey::from_base58(SYSVAR_RENT_ID).unwrap()
+        );
+        assert_eq!(instruction.data, vec![1]);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction =
+            initialize_account_with_program_id(&account, &mint, &owner, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, vec![1]);
+    }
+
+    #[test]
+    fn test_mint_to() {
+        let mint = mint_pubkey();
+        let destination = token_pubkey();
+        let authority = authority_pubkey();
+        let amount = 123u64;
+
+        let instruction = mint_to(&mint, &destination, &authority, amount);
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, mint);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, destination);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, authority);
+        assert!(instruction.accounts[2].is_signer);
+
+        let expected_data = {
+            let mut data = vec![7];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction =
+            mint_to_with_program_id(&mint, &destination, &authority, amount, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_burn() {
+        let account = token_pubkey();
+        let mint = mint_pubkey();
+        let authority = authority_pubkey();
+        let amount = 123u64;
+
+        let instruction = burn(&account, &mint, &authority, amount);
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, mint);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, authority);
+        assert!(instruction.accounts[2].is_signer);
+
+        let expected_data = {
+            let mut data = vec![8];
+            data.extend_from_slice(&amount.to_le_bytes());
+            data
+        };
+        assert_eq!(instruction.data, expected_data);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction =
+            burn_with_program_id(&account, &mint, &authority, amount, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, expected_data);
+    }
+
+    #[test]
+    fn test_close_account() {
+        let account = token_pubkey();
+        let destination = payer_pubkey();
+        let owner = authority_pubkey();
+
+        let instruction = close_account(&account, &destination, &owner);
+        assert_eq!(
+            instruction.program_id,
+            Pubkey::from_base58(TOKEN_PROGRAM_ID).unwrap()
+        );
+        assert_eq!(instruction.accounts.len(), 3);
+        assert_eq!(instruction.accounts[0].pubkey, account);
+        assert!(instruction.accounts[0].is_writable);
+        assert_eq!(instruction.accounts[1].pubkey, destination);
+        assert!(instruction.accounts[1].is_writable);
+        assert_eq!(instruction.accounts[2].pubkey, owner);
+        assert!(instruction.accounts[2].is_signer);
+        assert_eq!(instruction.data, vec![9]);
+
+        let token_2022_program = Pubkey::from_base58(TOKEN_2022_PROGRAM_ID).unwrap();
+        let instruction =
+            close_account_with_program_id(&account, &destination, &owner, &token_2022_program);
+        assert_eq!(instruction.program_id, token_2022_program);
+        assert_eq!(instruction.data, vec![9]);
     }
 }
