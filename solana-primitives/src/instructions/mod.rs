@@ -1,4 +1,5 @@
 // Re-export instruction modules
+pub mod anchor;
 pub mod associated_token;
 pub mod compute_budget;
 pub mod memo;
@@ -29,6 +30,9 @@ pub mod program_ids {
 
     /// Compute Budget program ID
     pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget111111111111111111111111111111";
+
+    /// Rent sysvar ID
+    pub const SYSVAR_RENT_ID: &str = "SysvarRent111111111111111111111111111111111";
 
     /// Helper function to get System program Pubkey
     pub fn system_program() -> Pubkey {
@@ -63,5 +67,10 @@ pub mod program_ids {
     /// Helper function to get Compute Budget program Pubkey
     pub fn compute_budget_program() -> Pubkey {
         Pubkey::from_base58(COMPUTE_BUDGET_PROGRAM_ID).unwrap()
+    }
+
+    /// Helper function to get Rent sysvar Pubkey
+    pub fn rent_sysvar() -> Pubkey {
+        Pubkey::from_base58(SYSVAR_RENT_ID).unwrap()
     }
 }
