@@ -43,9 +43,20 @@ pub fn get_address_from_public_key(public_key: &[u8]) -> Result<String> {
 
 /// Verify that a transaction's signatures are valid
 pub fn verify_transaction(transaction: &Transaction) -> Result<()> {
+    let required = transaction.message.header.num_required_signatures as usize;
+    if transaction.signatures.len() != required {
+        return Err(SolanaError::InvalidSignature(format!(
+            "signature count mismatch: found {}, required {}",
+            transaction.signatures.len(),
+            required
+        )));
+    }
+
     // Get the message bytes that were signed
-    let message_bytes = borsh::to_vec(&transaction.message)
-        .map_err(|e| SolanaError::SerializationError(e.to_string()))?;
+    let message_bytes = transaction
+        .message
+        .serialize_for_signing()
+        .map_err(SolanaError::SerializationError)?;
 
     for (i, signature) in transaction.signatures.iter().enumerate() {
         let signer_pubkey = &transaction.message.account_keys[i];
@@ -102,4 +113,44 @@ pub fn hash_data(data: &[u8]) -> [u8; 32] {
     let mut output = [0u8; 32];
     output.copy_from_slice(&result);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Message, MessageHeader};
+
+    fn build_message(signer: Pubkey) -> Message {
+        let header = MessageHeader {
+            num_required_signatures: 1,
+            num_readonly_signed_accounts: 0,
+            num_readonly_unsigned_accounts: 0,
+        };
+        Message::new(header, vec![signer], [0u8; 32], Vec::new())
+    }
+
+    #[test]
+    fn verify_transaction_rejects_missing_signatures() {
+        let private_key = [1u8; 32];
+        let public_key = get_public_key(&private_key).expect("valid key");
+        let signer = Pubkey::new(public_key);
+
+        let transaction = Transaction::new(build_message(signer));
+
+        let result = verify_transaction(&transaction);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_transaction_accepts_properly_signed_transaction() {
+        let private_key = [1u8; 32];
+        let public_key = get_public_key(&private_key).expect("valid key");
+        let signer = Pubkey::new(public_key);
+
+        let mut transaction = Transaction::new(build_message(signer));
+        transaction.sign(&[&private_key]).expect("sign succeeds");
+
+        let result = verify_transaction(&transaction);
+        assert!(result.is_ok());
+    }
 }

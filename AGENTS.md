@@ -108,3 +108,11 @@ This repo uses [Jujutsu](https://jj-vcs.github.io/jj/) as the primary VCS, co-lo
 - jj has no staging area: every working-copy edit is part of the current change automatically.
 - Amending is cheap and non-destructive — `jj describe`/`jj squash` rewrite the current change, and jj keeps the old version in the op log (`jj op log` / `jj op restore` to undo).
 - For PRs, push the change with `jj git push -c @` (creates a Git branch from the current change) or push an existing branch with `jj git push --branch <name>`.
+
+## JayJay Review Notes
+
+The user reviews diffs with the [JayJay](http://jayjay.hewig.dev) macOS app and can leave inline notes anchored to lines of the current `jj` working-copy diff. When the user mentions review notes or asks you to check JayJay, use the `jayjay` CLI:
+
+- `jayjay review notes` — list open notes for the current working-copy change. Each entry shows the `file:line` anchor, a snippet of the anchored line, a note id, and the note body.
+- `jayjay review resolve-note <ID>` — mark a note resolved by its id. Only resolve a note after actually addressing the change it asks for, and only when the user asked you to resolve it (or resolving is the obvious next step right after fixing it in the same turn) — it's a write to an external tool, not something to do proactively.
+- `jayjay review add-note --file <FILE> --line <LINE> -m <MESSAGE>` — add a note anchored to a diff line (`--side old|new` picks which side the line number refers to, default `new`). Rarely needed by an agent; mainly for the human reviewer.

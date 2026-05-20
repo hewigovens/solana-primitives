@@ -28,3 +28,7 @@ just build
 cargo run --example basic
 cargo run --example decode_tx
 ```
+
+## Releasing
+
+See [docs/RELEASING.md](docs/RELEASING.md) for cutting a new release.

@@ -4,6 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 const LOOKUP_TABLE_META_SIZE: usize = 56;
+/// On-chain `ProgramState` discriminant for an initialized lookup table (0 = `Uninitialized`).
+const LOOKUP_TABLE_DISCRIMINANT: u32 = 1;
 
 /// Address lookup table lookup information
 /// Used to describe which addresses in a lookup table to use in a transaction
@@ -63,6 +65,15 @@ impl AddressLookupTableAccount {
     /// Parse an address lookup table account from raw account data.
     pub fn from_account_data(key: Pubkey, data: &[u8]) -> Result<Self> {
         if data.len() < LOOKUP_TABLE_META_SIZE {
+            return Err(SolanaError::InvalidMessage);
+        }
+
+        let discriminant = u32::from_le_bytes(
+            data[0..4]
+                .try_into()
+                .map_err(|_| SolanaError::InvalidMessage)?,
+        );
+        if discriminant != LOOKUP_TABLE_DISCRIMINANT {
             return Err(SolanaError::InvalidMessage);
         }
 
@@ -131,6 +142,7 @@ mod tests {
     fn test_address_lookup_table_from_account_data() {
         let key = Pubkey::new([9; 32]);
         let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
+        data[0..4].copy_from_slice(&LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());
         data.extend_from_slice(&[2u8; 32]);
         data.extend_from_slice(&[3u8; 32]);
 
@@ -148,6 +160,18 @@ mod tests {
         let invalid_data = vec![0u8; LOOKUP_TABLE_META_SIZE + 1];
 
         let result = AddressLookupTableAccount::from_account_data(key, &invalid_data);
+
+        assert!(matches!(result, Err(SolanaError::InvalidMessage)));
+    }
+
+    #[test]
+    fn test_address_lookup_table_from_account_data_rejects_invalid_discriminant() {
+        let key = Pubkey::new([9; 32]);
+        let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
+        data[0..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        data.extend_from_slice(&[2u8; 32]);
+
+        let result = AddressLookupTableAccount::from_account_data(key, &data);
 
         assert!(matches!(result, Err(SolanaError::InvalidMessage)));
     }
