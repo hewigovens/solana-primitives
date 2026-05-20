@@ -8,8 +8,8 @@ edition = "2024"
 license = "Apache-2.0"
 readme = "README.md"
 description = "Fundamental data structures and tools needed to construct and submit Solana transactions."
-repository = "https://github.com/hewig/solana-primitives"
-homepage = "https://github.com/hewig/solana-primitives"
+repository = "https://github.com/hewigovens/solana-primitives"
+homepage = "https://github.com/hewigovens/solana-primitives"
 documentation = "https://docs.rs/solana-primitives"
 
 [profile.release]
