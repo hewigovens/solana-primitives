@@ -23,7 +23,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Verify package
         run: cargo publish --dry-run --locked --package solana-primitives
