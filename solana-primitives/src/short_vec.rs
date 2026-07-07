@@ -190,7 +190,8 @@ where
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
         let len = short_len.0 as usize;
-        let mut result = Vec::with_capacity(len);
+        // Cap the reservation so a malformed payload claiming a large count can't allocate big.
+        let mut result = Vec::with_capacity(len.min(1024));
         for i in 0..len {
             let elem = seq
                 .next_element()?
@@ -247,7 +248,7 @@ pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), &'static s
         // According to Solana's short_vec.rs, max 3 bytes for u16 values (up to 65535)
         // 1 byte for 0-127
         // 2 bytes for 128 - 16383
-        // 3 bytes for 16384 - 2097151 (but u16::MAX is 65535, so it's 16384 - 65535)
+        // 3 bytes for 16384 - 65535
         if size_of_len_encoding >= 3 && (current_byte & 0x80) != 0 {
             // If we've read 3 bytes and the 3rd byte still has MSB set, it's an invalid encoding for u16.
             // Or if we are about to read a 4th byte for a u16 value.
@@ -256,15 +257,9 @@ pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), &'static s
             return Err("Compact u16 length encoding too long (max 3 bytes for u16 values)");
         }
     }
-    // Final check: if the decoded length requires more than a u16, it's an error
-    // for contexts strictly expecting u16 lengths (like typical Solana vectors).
+    // A 3rd byte can still contribute up to 2,097,151; every caller expects u16-bounded.
     if len > u16::MAX as usize {
-        // This specific check might be context-dependent. If larger lengths are possible
-        // and the Compact-U16 encoding supports them (it does, up to u64 essentially),
-        // then this check would be removed or adjusted.
-        // For Solana message elements, they are typically u16-limited.
-        // return Err("Decoded length exceeds u16::MAX");
-        // Let's rely on consuming code to handle > u16 if necessary, this decoder handles the bytes.
+        return Err("Decoded length exceeds u16::MAX for compact-u16 encoding");
     }
     Ok((len, size_of_len_encoding))
 }
@@ -361,3 +356,27 @@ impl<T> ShortVec<T> {
 // For Borsh: T must be BorshSerialize + BorshDeserialize.
 // For Serde (via our custom impls): T must be Serialize + Deserialize<'de>.
 // The derive for BorshSerialize/Deserialize on ShortVec<T> will require T to also implement them for Vec<T>.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_compact_u16_len_rejects_values_above_u16_max() {
+        // Decodes to 2,097,151 without the u16 bound.
+        let bytes = [0xFF, 0xFF, 0x7F];
+        let result = decode_compact_u16_len(&bytes);
+        assert!(
+            result.is_err(),
+            "expected decode_compact_u16_len to reject a length exceeding u16::MAX, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn decode_compact_u16_len_accepts_u16_max() {
+        let bytes = [0xFF, 0xFF, 0x03];
+        let (len, consumed) = decode_compact_u16_len(&bytes).unwrap();
+        assert_eq!(len, u16::MAX as usize);
+        assert_eq!(consumed, 3);
+    }
+}

@@ -1,10 +1,12 @@
-use crate::instructions::program_ids::compute_budget_program;
+use crate::instructions::program_ids::{compute_budget_program, system_program};
 use crate::types::Instruction;
 
 /// Compute budget instruction discriminant for setting compute unit limit.
 pub const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
 /// Compute budget instruction discriminant for setting compute unit price.
 pub const SET_COMPUTE_UNIT_PRICE_DISCRIMINANT: u8 = 3;
+/// System program instruction discriminant for `AdvanceNonceAccount` (4-byte LE encoded).
+const ADVANCE_NONCE_ACCOUNT_DISCRIMINANT: [u8; 4] = [4, 0, 0, 0];
 
 /// Compute Budget Instructions
 pub enum ComputeBudgetInstruction {
@@ -149,7 +151,16 @@ pub fn ensure_compute_unit_price(instructions: &mut Vec<Instruction>, micro_lamp
         return false;
     }
 
-    instructions.insert(0, set_compute_unit_price(micro_lamports));
+    // Durable-nonce txs require AdvanceNonceAccount as instruction 0; insert after it.
+    let insert_pos = if instructions.first().is_some_and(|ix| {
+        ix.program_id == system_program()
+            && ix.data.get(0..4) == Some(&ADVANCE_NONCE_ACCOUNT_DISCRIMINANT[..])
+    }) {
+        1
+    } else {
+        0
+    };
+    instructions.insert(insert_pos, set_compute_unit_price(micro_lamports));
     true
 }
 
@@ -211,5 +222,30 @@ mod tests {
         );
 
         assert_eq!(instructions[1].program_id, system_program());
+    }
+
+    #[test]
+    fn test_ensure_compute_unit_price_preserves_leading_advance_nonce_account() {
+        let nonce_pubkey = Pubkey::new([3u8; 32]);
+        let authority_pubkey = Pubkey::new([4u8; 32]);
+        let payer = Pubkey::new([1u8; 32]);
+        let recipient = Pubkey::new([2u8; 32]);
+
+        let advance_nonce_ix =
+            crate::instructions::system::advance_nonce_account(&nonce_pubkey, &authority_pubkey);
+        let mut instructions = vec![advance_nonce_ix.clone(), transfer(&payer, &recipient, 10)];
+
+        let inserted = ensure_compute_unit_price(&mut instructions, 5_000);
+        assert!(inserted);
+        assert_eq!(instructions.len(), 3);
+
+        assert_eq!(instructions[0].program_id, advance_nonce_ix.program_id);
+        assert_eq!(instructions[0].data, advance_nonce_ix.data);
+
+        assert_eq!(instructions[1].program_id, compute_budget_program());
+        assert_eq!(
+            parse_compute_unit_price_data(&instructions[1].data),
+            Some(5_000)
+        );
     }
 }

@@ -10,8 +10,8 @@ pub const MAX_SEED_LEN: usize = 32;
 
 /// Find a program address and bump seed for the given seeds
 pub fn find_program_address(program_id: &Pubkey, seeds: &[&[u8]]) -> Result<(Pubkey, u8)> {
-    // Validate seeds
-    if seeds.len() > MAX_SEEDS {
+    // The bump seed occupies one of the MAX_SEEDS slots.
+    if seeds.len() >= MAX_SEEDS {
         return Err(SolanaError::InvalidPubkey(format!(
             "too many seeds: {}, max: {}",
             seeds.len(),
@@ -75,8 +75,8 @@ pub fn create_program_address(
     seeds: &[&[u8]],
     bump_seed: u8,
 ) -> Result<Pubkey> {
-    // Validate seeds
-    if seeds.len() > MAX_SEEDS {
+    // The bump seed occupies one of the MAX_SEEDS slots.
+    if seeds.len() >= MAX_SEEDS {
         return Err(SolanaError::InvalidPubkey(format!(
             "too many seeds: {}, max: {}",
             seeds.len(),
@@ -190,6 +190,29 @@ mod tests {
     }
 
     #[test]
+    fn test_find_program_address_max_seeds_rejected() {
+        let program_id = create_test_program_id();
+        let seed_strings: Vec<String> = (0..MAX_SEEDS).map(|i| format!("seed{i}")).collect();
+        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
+
+        let result = find_program_address(&program_id, &seed_refs);
+        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
+    }
+
+    #[test]
+    fn test_find_program_address_max_seeds_minus_one_succeeds() {
+        let program_id = create_test_program_id();
+        let seed_strings: Vec<String> = (0..MAX_SEEDS - 1).map(|i| format!("seed{i}")).collect();
+        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
+
+        let (pda, bump) = find_program_address(&program_id, &seed_refs).unwrap();
+        assert!(!is_on_curve(pda.as_bytes()));
+
+        let recreated_pda = create_program_address(&program_id, &seed_refs, bump).unwrap();
+        assert_eq!(pda, recreated_pda);
+    }
+
+    #[test]
     fn test_find_program_address_seed_too_long() {
         let program_id = create_test_program_id();
         let seed = [0u8; MAX_SEED_LEN + 1];
@@ -209,6 +232,27 @@ mod tests {
         let pda = create_program_address(&program_id, &seeds, bump).unwrap();
 
         // Verify the PDA is off curve
+        assert!(!is_on_curve(pda.as_bytes()));
+    }
+
+    #[test]
+    fn test_create_program_address_max_seeds_rejected() {
+        let program_id = create_test_program_id();
+        let seed_strings: Vec<String> = (0..MAX_SEEDS).map(|i| format!("seed{i}")).collect();
+        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
+
+        let result = create_program_address(&program_id, &seed_refs, 255);
+        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
+    }
+
+    #[test]
+    fn test_create_program_address_max_seeds_minus_one_succeeds() {
+        let program_id = create_test_program_id();
+        let seed_strings: Vec<String> = (0..MAX_SEEDS - 1).map(|i| format!("seed{i}")).collect();
+        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
+
+        let (_, bump) = find_program_address(&program_id, &seed_refs).unwrap();
+        let pda = create_program_address(&program_id, &seed_refs, bump).unwrap();
         assert!(!is_on_curve(pda.as_bytes()));
     }
 

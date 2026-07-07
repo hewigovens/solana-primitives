@@ -143,6 +143,11 @@ impl TransactionBuilder {
 
         let account_keys: Vec<Pubkey> = final_account_keys;
 
+        // Legacy messages address accounts with a single `u8` index (max 256 accounts).
+        if account_keys.len() > u8::MAX as usize + 1 {
+            return Err(SolanaError::InvalidMessage);
+        }
+
         // Create a map of pubkey to index for quick lookups
         let key_to_index: HashMap<Pubkey, u8> = account_keys
             .iter()
@@ -170,29 +175,36 @@ impl TransactionBuilder {
             })
             .collect();
 
-        // Create message header
+        // Each count below can independently reach 256 and wrap when cast to u8.
         let num_required_signatures = self
             .account_metas
             .values()
             .filter(|meta| meta.is_signer)
-            .count() as u8;
+            .count();
 
         let num_readonly_signed_accounts = self
             .account_metas
             .values()
             .filter(|meta| meta.is_signer && !meta.is_writable)
-            .count() as u8;
+            .count();
 
         let num_readonly_unsigned_accounts = self
             .account_metas
             .values()
             .filter(|meta| !meta.is_signer && !meta.is_writable)
-            .count() as u8;
+            .count();
+
+        if num_required_signatures > u8::MAX as usize
+            || num_readonly_signed_accounts > u8::MAX as usize
+            || num_readonly_unsigned_accounts > u8::MAX as usize
+        {
+            return Err(SolanaError::InvalidMessage);
+        }
 
         let header = MessageHeader {
-            num_required_signatures,
-            num_readonly_signed_accounts,
-            num_readonly_unsigned_accounts,
+            num_required_signatures: num_required_signatures as u8,
+            num_readonly_signed_accounts: num_readonly_signed_accounts as u8,
+            num_readonly_unsigned_accounts: num_readonly_unsigned_accounts as u8,
         };
 
         // Create message
@@ -204,7 +216,7 @@ impl TransactionBuilder {
         };
 
         // Create empty signatures vector
-        let signatures = vec![SignatureBytes::new([0u8; 64]); num_required_signatures as usize];
+        let signatures = vec![SignatureBytes::new([0u8; 64]); num_required_signatures];
 
         Ok(Transaction {
             signatures,
@@ -421,6 +433,7 @@ impl TransactionBuilder {
 mod tests {
     use super::TransactionBuilder;
     use crate::Pubkey;
+    use crate::SolanaError;
     use crate::builder::InstructionBuilder;
     use crate::instructions::{
         program_ids::{system_program, token_program},
@@ -850,6 +863,75 @@ mod tests {
         assert_eq!(
             rebuilt_tx.serialize().unwrap(),
             expected_tx.serialize().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_build_rejects_more_than_256_distinct_accounts() {
+        let recent_blockhash = test_blockhash();
+
+        let distinct_pubkey = |index: u32| -> Pubkey {
+            let mut bytes = [0u8; 32];
+            bytes[0..4].copy_from_slice(&index.to_le_bytes());
+            Pubkey::new(bytes)
+        };
+
+        let fee_payer = distinct_pubkey(0);
+        let program_id = distinct_pubkey(1);
+
+        let accounts: Vec<AccountMeta> = (2..257)
+            .map(|index| AccountMeta::new_writable(distinct_pubkey(index)))
+            .collect();
+
+        let instruction = Instruction {
+            program_id,
+            accounts,
+            data: vec![],
+        };
+
+        let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+        builder.add_instruction(instruction);
+
+        let result = builder.build();
+        assert!(
+            matches!(result, Err(SolanaError::InvalidMessage)),
+            "expected build() to reject 257 distinct accounts with InvalidMessage, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_rejects_256_required_signers() {
+        let recent_blockhash = test_blockhash();
+
+        let distinct_pubkey = |index: u32| -> Pubkey {
+            let mut bytes = [0u8; 32];
+            bytes[0..4].copy_from_slice(&index.to_le_bytes());
+            Pubkey::new(bytes)
+        };
+
+        let fee_payer = distinct_pubkey(0);
+        // 256 signers total: passes the account-count check but wraps to 0 as u8 without the fix.
+        let signer_pubkeys: Vec<Pubkey> = (1..256).map(distinct_pubkey).collect();
+        let program_id = signer_pubkeys[0];
+
+        let accounts: Vec<AccountMeta> = signer_pubkeys
+            .iter()
+            .map(|pubkey| AccountMeta::new_signer_writable(*pubkey))
+            .collect();
+
+        let instruction = Instruction {
+            program_id,
+            accounts,
+            data: vec![],
+        };
+
+        let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+        builder.add_instruction(instruction);
+
+        let result = builder.build();
+        assert!(
+            matches!(result, Err(SolanaError::InvalidMessage)),
+            "expected build() to reject 256 required signers with InvalidMessage, got {result:?}"
         );
     }
 }
