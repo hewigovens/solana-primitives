@@ -19,7 +19,7 @@ codegen-units = 1
 
 
 [workspace.dependencies]
-ed25519-dalek = "2.2"
+ed25519-dalek = "3.0"
 borsh = { version = "1.6", features = ["derive"] }
 bs58 = "0.5"
 thiserror = "2.0"
