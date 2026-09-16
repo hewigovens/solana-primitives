@@ -9,6 +9,7 @@ fmt-check:
 
 lint:
     cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets --no-default-features -- -D warnings
     cargo clippy --all-targets --all-features -- -D warnings
 
 lint-fix:
@@ -16,6 +17,7 @@ lint-fix:
 
 test:
     cargo test --workspace
+    cargo test --workspace --no-default-features
     cargo test --workspace --all-features
 
 doc:

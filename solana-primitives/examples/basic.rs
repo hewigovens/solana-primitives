@@ -21,11 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tx_builder.add_instruction(transfer(&fee_payer, &recipient, 1_000_000));
     let mut transaction = tx_builder.build()?;
 
-    println!("  instructions: {}", transaction.message.instructions.len());
-    println!("  account keys: {}", transaction.message.account_keys.len());
+    println!("  instructions: {}", transaction.instructions().len());
+    println!("  account keys: {}", transaction.account_keys().len());
     println!(
         "  required signatures: {}",
-        transaction.message.header.num_required_signatures
+        transaction.num_required_signatures()
     );
     println!("  signed: {}", transaction.is_signed());
     transaction.validate_size()?;

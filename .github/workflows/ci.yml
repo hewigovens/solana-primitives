@@ -19,6 +19,8 @@ jobs:
         features:
           - name: default
             flags: ""
+          - name: no-default
+            flags: "--no-default-features"
           - name: serde
             flags: "--features serde"
           - name: borsh
@@ -42,4 +44,6 @@ jobs:
       - name: Install Rust 1.88
         run: rustup toolchain install 1.88.0 --profile minimal
       - name: Check
-        run: cargo +1.88.0 check --all-features
+        run: |
+          cargo +1.88.0 check --all-features
+          cargo +1.88.0 check --no-default-features

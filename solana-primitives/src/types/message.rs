@@ -1,10 +1,21 @@
 use crate::compiler::{CompiledKeys, compile_instructions};
-use crate::error::{Result, SanitizeError};
+use crate::error::{Result, SanitizeError, SolanaError};
 use crate::types::v1::{MessageV1, TransactionConfig};
 use crate::types::{
     AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
 };
 use crate::wire;
+
+/// Decode a base58 blockhash (as returned by `getLatestBlockhash`) or durable nonce value.
+pub fn decode_blockhash(blockhash: &str) -> Result<[u8; 32]> {
+    let bytes = bs58::decode(blockhash)
+        .into_vec()
+        .map_err(|_| SolanaError::InvalidBase58)?;
+    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| SolanaError::InvalidLength {
+        expected: 32,
+        actual: bytes.len(),
+    })
+}
 
 /// Account indexes are `u8`, so a message can reference at most 256 accounts.
 const MAX_ACCOUNT_KEYS: usize = 256;
@@ -398,7 +409,7 @@ impl VersionedMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::{DecodeError, SolanaError};
+    use crate::error::DecodeError;
 
     fn header(
         num_required_signatures: u8,
@@ -538,6 +549,22 @@ mod tests {
         assert_eq!(
             v0(vec![], vec![lookup(&indexes[1..], &[])]).sanitize(),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn decode_blockhash_rules() {
+        assert_eq!(
+            decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd"),
+            Ok(Pubkey::from_str_const("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd").to_bytes())
+        );
+        assert_eq!(decode_blockhash("0"), Err(SolanaError::InvalidBase58));
+        assert_eq!(
+            decode_blockhash("2g"),
+            Err(SolanaError::InvalidLength {
+                expected: 32,
+                actual: 1
+            })
         );
     }
 

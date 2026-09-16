@@ -9,7 +9,7 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 - `cargo test` - Run all tests (default features)
 - `just lint-fix` - Run linter with auto-fixes
 - `just lint` - Run clippy via justfile
-- `just test` - Run tests with default and all features
+- `just test` - Run tests with default, no default, and all features
 - `just fmt-check` - Check formatting
 - `just doc` - Build rustdoc with warnings denied
 - `just build` - Build via justfile
@@ -22,18 +22,18 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 
 ## Architecture Overview
 
-This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385) without requiring the full Solana SDK. Default dependencies are only `ed25519-dalek`, `bs58`, and `sha2`; `serde` and `borsh` are opt-in features for the Rust data model and are never the wire format.
+This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385) without requiring the full Solana SDK. The core depends only on `bs58`, `sha2`, and `curve25519-dalek` (PDA curve checks); the default `signing` feature adds `ed25519-dalek`. `serde` and `borsh` are opt-in features for the Rust data model and are never the wire format.
 
 ### Core Module Structure
 
-- **`types/`** - Data model: `Pubkey`, `SignatureBytes`, `Instruction`/`AccountMeta`/`CompiledInstruction`, `Message` (legacy), `MessageV0`, `VersionedMessage`, `Transaction`, `VersionedTransaction { signatures, message }`, lookup tables, PDAs
+- **`types/`** - Data model: `Pubkey`, `SignatureBytes`, `Instruction`/`AccountMeta`/`CompiledInstruction`, `Message` (legacy), `MessageV0`, `VersionedMessage`, `VersionedTransaction { signatures, message }` (the only transaction type), lookup tables, PDAs
 - **`types/v1.rs`** - Transaction v1: `MessageV1`, `TransactionConfig`, `TransactionConfigMask`, v1 limits
 - **`wire.rs`** (internal) - The only wire codec: `WireReader`, append-only writers, legacy/v0 bodies, the v1 fixed layout, and both transaction envelopes
 - **`compiler.rs`** (internal) - `CompiledKeys`: one account compiler for legacy/v0/v1 (role merging, Solana SDK key order, v0 lookup extraction that keeps signers, programs, and the durable nonce static)
 - **`builder/`** - `TransactionBuilder` (`build`, `build_v0`, `build_v1`), `InstructionBuilder`, `InstructionDataBuilder`
 - **`instructions/`** - System, SPL Token, ATA, Compute Budget, Memo, Anchor helpers; `program_ids` holds const `Pubkey`s
-- **`crypto/`** - Key derivation, signing, verification, SHA-256
-- **`short_vec.rs`** - Canonical compact-u16 encoding shared by the codec and the optional serde helpers
+- **`crypto/`** - SHA-256; key derivation, signing, and verification behind the `signing` feature
+- **`short_vec.rs`** (internal) - Canonical compact-u16 length encoding used by the wire codec
 - **`error.rs`** - `SolanaError` with typed `CompileError`/`DecodeError`/`EncodeError`/`SanitizeError`
 
 ### Key Design Patterns
@@ -50,7 +50,7 @@ This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385)
 2. Build instructions with `InstructionBuilder` or the `instructions` modules
 3. Add them with `add_instruction()` / `add_instructions()`
 4. Call `build()`, `build_v0(&tables)`, or `build_v1(config)`; the result is sanitized and has placeholder signatures
-5. `sign()` / `partial_sign()`, then `serialize()`
+5. `sign()` / `partial_sign()` (`signing` feature), or sign `serialize_message()` elsewhere and `add_signature()`; then `serialize()`
 
 ### Testing Strategy
 
@@ -58,7 +58,8 @@ This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385)
 - Wire-format and instruction bytes are checked against golden vectors generated with the Solana SDK (`src/test_utils/vectors.rs`, built from `src/test_utils/scenarios.rs` with keys `sha256(label)`). Self-roundtrips alone are not enough
 - Use `hexlit::hex!` for opaque byte fixtures
 - Examples serve as integration tests demonstrating real usage patterns
-- CI runs build, tests (default and all features), clippy, rustfmt, and rustdoc on push/PR to main
+- Tests must pass with default features, `--no-default-features`, and `--all-features` (`just test`); gate signing-only tests with `cfg(feature = "signing")`
+- CI runs build and tests across a feature matrix, an MSRV check, clippy, rustfmt, and rustdoc on push/PR to main
 
 ## Coding Guidelines
 

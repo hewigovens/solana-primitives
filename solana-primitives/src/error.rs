@@ -117,9 +117,9 @@ pub enum DecodeError {
     /// Bytes remain after a complete value.
     TrailingBytes,
     /// A compact-u16 has a zero continuation byte.
-    NonCanonicalShortU16,
+    NonCanonicalCompactU16,
     /// A compact-u16 exceeds `u16::MAX`.
-    ShortU16Overflow,
+    CompactU16Overflow,
     /// The first transaction byte is neither a legacy/v0 signature count nor a v1 prefix.
     InvalidTransactionDiscriminator(u8),
     /// The message version is not supported.
@@ -135,8 +135,8 @@ impl fmt::Display for DecodeError {
         match self {
             Self::UnexpectedEof => f.write_str("unexpected end of input"),
             Self::TrailingBytes => f.write_str("trailing bytes after value"),
-            Self::NonCanonicalShortU16 => f.write_str("non-canonical compact-u16"),
-            Self::ShortU16Overflow => f.write_str("compact-u16 exceeds u16::MAX"),
+            Self::NonCanonicalCompactU16 => f.write_str("non-canonical compact-u16"),
+            Self::CompactU16Overflow => f.write_str("compact-u16 exceeds u16::MAX"),
             Self::InvalidTransactionDiscriminator(byte) => {
                 write!(f, "invalid transaction discriminator {byte:#04x}")
             }

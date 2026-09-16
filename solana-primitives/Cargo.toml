@@ -11,16 +11,19 @@ homepage.workspace = true
 documentation.workspace = true
 
 [features]
-default = []
+default = ["signing"]
+# Ed25519 key derivation, signing, and signature verification.
+signing = ["dep:ed25519-dalek"]
 # Serde support for the Rust data model (not the transaction wire format).
 serde = ["dep:serde"]
 # Borsh support for `Pubkey` and `SignatureBytes` (not the transaction wire format).
 borsh = ["dep:borsh"]
 
 [dependencies]
-ed25519-dalek.workspace = true
 bs58.workspace = true
+curve25519-dalek.workspace = true
 sha2.workspace = true
+ed25519-dalek = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 
@@ -28,6 +31,10 @@ borsh = { workspace = true, optional = true }
 base64.workspace = true
 hexlit.workspace = true
 serde_json.workspace = true
+
+[[example]]
+name = "basic"
+required-features = ["signing"]
 
 [package.metadata.docs.rs]
 all-features = true

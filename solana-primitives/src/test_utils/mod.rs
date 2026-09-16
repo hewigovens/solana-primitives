@@ -6,7 +6,7 @@
 pub mod scenarios;
 pub mod vectors;
 
-use crate::crypto::{get_public_key, hash_data};
+use crate::crypto::hash_data;
 use crate::types::{AccountMeta, Pubkey};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
@@ -17,15 +17,40 @@ pub fn key(label: &str) -> Pubkey {
 
 /// A deterministic Ed25519 signer: the private key is `sha256(label)`.
 pub struct TestSigner {
+    #[cfg_attr(not(feature = "signing"), allow(dead_code))]
     pub private_key: [u8; 32],
     pub pubkey: Pubkey,
 }
 
+/// Public keys of the signers used by the golden vectors, so tests that only
+/// compile messages don't need the `signing` feature.
+const SIGNER_PUBKEYS: [(&str, &str); 3] = [
+    ("payer", "ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4"),
+    (
+        "new_account",
+        "77HiZ3VSa541faietBzfsacjmMrzoKZPkXCx6rxSyTZM",
+    ),
+    ("cosigner", "Bf9yzFj1gCCZFu6y5FwLdgKmNqgPZRKpShrkuoELNrJq"),
+];
+
 pub fn signer(label: &str) -> TestSigner {
-    let private_key = hash_data(label.as_bytes());
+    let (_, pubkey) = SIGNER_PUBKEYS
+        .iter()
+        .find(|(name, _)| *name == label)
+        .unwrap_or_else(|| panic!("no test signer named {label}"));
     TestSigner {
-        private_key,
-        pubkey: Pubkey::new(get_public_key(&private_key).unwrap()),
+        private_key: hash_data(label.as_bytes()),
+        pubkey: Pubkey::from_str_const(pubkey),
+    }
+}
+
+#[cfg(feature = "signing")]
+#[test]
+fn signer_pubkeys_match_private_keys() {
+    for (label, _) in SIGNER_PUBKEYS {
+        let signer = signer(label);
+        let derived = crate::crypto::get_public_key(&signer.private_key).unwrap();
+        assert_eq!(signer.pubkey.to_bytes(), derived, "{label}");
     }
 }
 

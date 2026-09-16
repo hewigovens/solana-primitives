@@ -1,13 +1,14 @@
+#[cfg(feature = "signing")]
 use crate::crypto::{get_public_key, sign_message, verify_signature};
-use crate::error::{DecodeError, Result, SanitizeError, SolanaError};
+use crate::error::{Result, SanitizeError, SolanaError};
 use crate::instructions::compute_budget::{
     ComputeBudgetInstruction, parse_compute_budget_requests,
 };
 use crate::instructions::program_ids::{compute_budget_program, system_program};
 use crate::instructions::system::is_advance_nonce_instruction_data;
 use crate::types::{
-    CompiledInstruction, MAX_TRANSACTION_SIZE, Message, MessageAddressTableLookup, MessageHeader,
-    Pubkey, SignatureBytes, VersionedMessage, v1,
+    CompiledInstruction, MAX_TRANSACTION_SIZE, MessageAddressTableLookup, MessageHeader, Pubkey,
+    SignatureBytes, VersionedMessage, v1,
 };
 use crate::wire;
 
@@ -22,140 +23,10 @@ pub enum TransactionVersion {
     V1,
 }
 
-/// A legacy transaction.
+/// A legacy, v0, or v1 transaction.
 ///
-/// Serialization, signing, and verification share their implementation with
-/// [`VersionedTransaction`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Transaction {
-    /// One signature per required signer, in account key order.
-    pub signatures: Vec<SignatureBytes>,
-    /// The message
-    pub message: Message,
-}
-
-impl Transaction {
-    /// Create an unsigned transaction with placeholder signatures.
-    pub fn new(message: Message) -> Self {
-        Self {
-            signatures: placeholder_signatures(&message.header),
-            message,
-        }
-    }
-
-    /// Get the number of required signatures
-    pub fn num_required_signatures(&self) -> u8 {
-        self.message.num_required_signatures()
-    }
-
-    /// Get the number of read-only signed accounts
-    pub fn num_readonly_signed_accounts(&self) -> u8 {
-        self.message.num_readonly_signed_accounts()
-    }
-
-    /// Get the number of read-only unsigned accounts
-    pub fn num_readonly_unsigned_accounts(&self) -> u8 {
-        self.message.num_readonly_unsigned_accounts()
-    }
-
-    /// Get the account keys
-    pub fn account_keys(&self) -> &[Pubkey] {
-        &self.message.account_keys
-    }
-
-    /// Get the recent blockhash
-    pub fn recent_blockhash(&self) -> &[u8; 32] {
-        &self.message.recent_blockhash
-    }
-
-    /// Get the instructions
-    pub fn instructions(&self) -> &[CompiledInstruction] {
-        &self.message.instructions
-    }
-
-    /// The bytes signers sign.
-    pub fn message_data(&self) -> Result<Vec<u8>> {
-        self.message.serialize()
-    }
-
-    /// Serialize to wire bytes.
-    pub fn serialize(&self) -> Result<Vec<u8>> {
-        Ok(wire::encode_legacy_envelope(&self.signatures, |out| {
-            wire::write_legacy_message(out, &self.message)
-        })?)
-    }
-
-    /// Serialize to wire bytes; same as [`Transaction::serialize`].
-    #[deprecated(since = "0.3.0", note = "use `serialize`")]
-    pub fn serialize_legacy(&self) -> Result<Vec<u8>> {
-        self.serialize()
-    }
-
-    /// Decode and sanitize a legacy transaction. Other versions are rejected.
-    pub fn deserialize(bytes: &[u8]) -> Result<Self> {
-        VersionedTransaction::deserialize(bytes)?
-            .into_legacy_transaction()
-            .ok_or(DecodeError::UnexpectedVersion.into())
-    }
-
-    /// Decode a legacy transaction; same as [`Transaction::deserialize`].
-    #[deprecated(since = "0.3.0", note = "use `deserialize`")]
-    pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self> {
-        Self::deserialize(bytes)
-    }
-
-    /// Sign with every required signer. See [`VersionedTransaction::sign`].
-    pub fn sign(&mut self, private_keys: &[&[u8]]) -> Result<()> {
-        self.sign_with(private_keys, true)
-    }
-
-    /// Sign with some of the required signers. See [`VersionedTransaction::partial_sign`].
-    pub fn partial_sign(&mut self, private_keys: &[&[u8]]) -> Result<()> {
-        self.sign_with(private_keys, false)
-    }
-
-    fn sign_with(&mut self, private_keys: &[&[u8]], require_all: bool) -> Result<()> {
-        self.message.sanitize()?;
-        let message_data = self.message_data()?;
-        let signers = required_signers(&self.message.header, &self.message.account_keys);
-        sign(
-            &mut self.signatures,
-            signers,
-            &message_data,
-            private_keys,
-            require_all,
-        )
-    }
-
-    /// Whether every required signature is present (not verified).
-    pub fn is_signed(&self) -> bool {
-        is_signed(&self.message.header, &self.signatures)
-    }
-
-    /// Sanitize and verify every required signature.
-    pub fn verify(&self) -> Result<()> {
-        self.sanitize()?;
-        verify(
-            &self.signatures,
-            required_signers(&self.message.header, &self.message.account_keys),
-            &self.message_data()?,
-        )
-    }
-
-    /// Check message sanitization rules and the signature count.
-    pub fn sanitize(&self) -> Result<()> {
-        self.message.sanitize()?;
-        sanitize_signature_count(&self.message.header, self.signatures.len())
-    }
-
-    /// Check that the wire size is within [`MAX_TRANSACTION_SIZE`].
-    pub fn validate_size(&self) -> Result<()> {
-        check_size(self.serialize()?.len(), MAX_TRANSACTION_SIZE)
-    }
-}
-
-/// A transaction of any supported version.
+/// Legacy and v0 serialize as `compact-u16 signature count || signatures ||
+/// message`; v1 as `message || signatures`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VersionedTransaction {
@@ -163,15 +34,6 @@ pub struct VersionedTransaction {
     pub signatures: Vec<SignatureBytes>,
     /// The message.
     pub message: VersionedMessage,
-}
-
-impl From<Transaction> for VersionedTransaction {
-    fn from(transaction: Transaction) -> Self {
-        Self {
-            signatures: transaction.signatures,
-            message: VersionedMessage::Legacy(transaction.message),
-        }
-    }
 }
 
 impl VersionedTransaction {
@@ -189,17 +51,6 @@ impl VersionedTransaction {
             VersionedMessage::Legacy(_) => TransactionVersion::Legacy,
             VersionedMessage::V0(_) => TransactionVersion::V0,
             VersionedMessage::V1(_) => TransactionVersion::V1,
-        }
-    }
-
-    /// The legacy transaction, if this is one.
-    pub fn into_legacy_transaction(self) -> Option<Transaction> {
-        match self.message {
-            VersionedMessage::Legacy(message) => Some(Transaction {
-                signatures: self.signatures,
-                message,
-            }),
-            _ => None,
         }
     }
 
@@ -304,47 +155,77 @@ impl VersionedTransaction {
         check_size(self.serialize()?.len(), self.max_size())
     }
 
+    /// Place a signature made elsewhere (for example by a hardware wallet) in
+    /// every slot `signer` occupies. The signature is not verified.
+    ///
+    /// Fails if `signer` is not a required signer.
+    pub fn add_signature(&mut self, signer: &Pubkey, signature: SignatureBytes) -> Result<()> {
+        self.message.sanitize()?;
+        let signers = required_signers(self.message.header(), self.message.static_account_keys());
+        place_signature(&mut self.signatures, signers, signer, signature)
+    }
+
     /// Sign with every required signer.
     ///
     /// Each key must belong to a required signer; its signature is placed at
     /// that signer's index. Fails if any required signature is still missing.
+    #[cfg(feature = "signing")]
     pub fn sign(&mut self, private_keys: &[&[u8]]) -> Result<()> {
-        self.sign_with(private_keys, true)
+        self.sign_with(private_keys)?;
+        let signers = required_signers(self.message.header(), self.message.static_account_keys());
+        match signers
+            .iter()
+            .zip(&self.signatures)
+            .find(|(_, signature)| signature.is_placeholder())
+        {
+            Some((signer, _)) => Err(SolanaError::MissingSigner(*signer)),
+            None => Ok(()),
+        }
     }
 
     /// Sign with some of the required signers, leaving other signatures as they are.
     ///
     /// Each key must belong to a required signer.
+    #[cfg(feature = "signing")]
     pub fn partial_sign(&mut self, private_keys: &[&[u8]]) -> Result<()> {
-        self.sign_with(private_keys, false)
+        self.sign_with(private_keys)
     }
 
-    fn sign_with(&mut self, private_keys: &[&[u8]], require_all: bool) -> Result<()> {
+    #[cfg(feature = "signing")]
+    fn sign_with(&mut self, private_keys: &[&[u8]]) -> Result<()> {
         self.message.sanitize()?;
         let message_data = self.serialize_message()?;
         let signers = required_signers(self.message.header(), self.message.static_account_keys());
-        sign(
-            &mut self.signatures,
-            signers,
-            &message_data,
-            private_keys,
-            require_all,
-        )
+        for private_key in private_keys {
+            let signer = Pubkey::new(get_public_key(private_key)?);
+            let signature = sign_message(private_key, &message_data)?;
+            place_signature(&mut self.signatures, signers, &signer, signature)?;
+        }
+        Ok(())
     }
 
     /// Whether every required signature is present (not verified).
     pub fn is_signed(&self) -> bool {
-        is_signed(self.header(), &self.signatures)
+        self.signatures.len() == usize::from(self.num_required_signatures())
+            && self
+                .signatures
+                .iter()
+                .all(|signature| !signature.is_placeholder())
     }
 
     /// Sanitize and verify every required signature.
+    #[cfg(feature = "signing")]
     pub fn verify(&self) -> Result<()> {
         self.sanitize()?;
-        verify(
-            &self.signatures,
-            required_signers(self.header(), self.account_keys()),
-            &self.serialize_message()?,
-        )
+        let message_data = self.serialize_message()?;
+        let signers = required_signers(self.header(), self.account_keys());
+        for (signer, signature) in signers.iter().zip(&self.signatures) {
+            if signature.is_placeholder() {
+                return Err(SolanaError::MissingSigner(*signer));
+            }
+            verify_signature(signer, &message_data, signature)?;
+        }
+        Ok(())
     }
 
     fn program_id(&self, instruction: &CompiledInstruction) -> Option<Pubkey> {
@@ -542,51 +423,22 @@ fn check_size(size: usize, max: usize) -> Result<()> {
     Ok(())
 }
 
-fn is_signed(header: &MessageHeader, signatures: &[SignatureBytes]) -> bool {
-    signatures.len() == usize::from(header.num_required_signatures)
-        && signatures
-            .iter()
-            .all(|signature| !signature.is_placeholder())
-}
-
-fn sign(
+/// Put `signature` in each of `signer`'s slots, sizing `signatures` to the signer count.
+fn place_signature(
     signatures: &mut Vec<SignatureBytes>,
     signers: &[Pubkey],
-    message_data: &[u8],
-    private_keys: &[&[u8]],
-    require_all: bool,
+    signer: &Pubkey,
+    signature: SignatureBytes,
 ) -> Result<()> {
+    if !signers.contains(signer) {
+        return Err(SolanaError::UnexpectedSigner(*signer));
+    }
     signatures.resize(signers.len(), SignatureBytes::default());
-    for private_key in private_keys {
-        let pubkey = Pubkey::new(get_public_key(private_key)?);
-        if !signers.contains(&pubkey) {
-            return Err(SolanaError::UnexpectedSigner(pubkey));
+    // A key may occupy several signer slots; each needs the signature.
+    for (key, slot) in signers.iter().zip(signatures.iter_mut()) {
+        if key == signer {
+            *slot = signature;
         }
-        let signature = sign_message(private_key, message_data)?;
-        // A key may occupy several signer slots; each needs the signature.
-        for (signer, slot) in signers.iter().zip(signatures.iter_mut()) {
-            if *signer == pubkey {
-                *slot = signature;
-            }
-        }
-    }
-    if require_all
-        && let Some((signer, _)) = signers
-            .iter()
-            .zip(signatures.iter())
-            .find(|(_, signature)| signature.is_placeholder())
-    {
-        return Err(SolanaError::MissingSigner(*signer));
-    }
-    Ok(())
-}
-
-fn verify(signatures: &[SignatureBytes], signers: &[Pubkey], message_data: &[u8]) -> Result<()> {
-    for (signer, signature) in signers.iter().zip(signatures) {
-        if signature.is_placeholder() {
-            return Err(SolanaError::MissingSigner(*signer));
-        }
-        verify_signature(signer, message_data, signature)?;
     }
     Ok(())
 }
@@ -595,22 +447,13 @@ fn verify(signatures: &[SignatureBytes], signers: &[Pubkey], message_data: &[u8]
 mod tests {
     use super::*;
     use crate::TransactionBuilder;
-    use crate::crypto::hash_data;
+    use crate::error::DecodeError;
     use crate::instructions::{compute_budget, system};
-    use crate::test_utils::{LEGACY_TX, MAYAN_V0_TX, base64, key, scenarios, vectors};
-    use crate::types::Instruction;
-    use crate::types::{MessageV0, TransactionConfig};
+    use crate::test_utils::{LEGACY_TX, MAYAN_V0_TX, base64, key, scenarios, signer, vectors};
+    use crate::types::{Instruction, Message, TransactionConfig};
 
     fn decode(fixture: &str) -> VersionedTransaction {
         VersionedTransaction::deserialize(&base64(fixture)).unwrap()
-    }
-
-    fn signer(label: &str) -> ([u8; 32], Pubkey) {
-        let private_key = hash_data(label.as_bytes());
-        (
-            private_key,
-            Pubkey::new(get_public_key(&private_key).unwrap()),
-        )
     }
 
     /// Envelope + legacy message with `header`, `num_accounts` distinct keys, and a zero
@@ -649,14 +492,6 @@ mod tests {
             let tx = VersionedTransaction::deserialize(&bytes).unwrap();
             assert_eq!(tx.serialize().unwrap(), bytes);
         }
-
-        let legacy = decode(LEGACY_TX).into_legacy_transaction().unwrap();
-        assert_eq!(legacy.serialize().unwrap(), base64(LEGACY_TX));
-        assert_eq!(Transaction::deserialize(&base64(LEGACY_TX)), Ok(legacy));
-        assert_eq!(
-            Transaction::deserialize(&base64(MAYAN_V0_TX)),
-            Err(DecodeError::UnexpectedVersion.into())
-        );
     }
 
     #[test]
@@ -685,71 +520,17 @@ mod tests {
             compute_budget::request_heap_frame(65_536),
             compute_budget::set_loaded_accounts_data_size_limit(4096),
         ]);
-        let mut tx = VersionedTransaction::from(builder.build().unwrap());
+        let mut tx = builder.build().unwrap();
         assert_eq!(tx.get_heap_size(), Some(65_536));
         assert_eq!(tx.get_loaded_accounts_data_size_limit(), Some(4096));
         assert_eq!(tx.get_compute_unit_price(), None);
         assert_eq!(tx.set_compute_unit_price(1), Ok(false));
     }
 
-    #[test]
-    fn sign_and_verify() {
-        let (payer_key, payer) = signer("payer");
-        let (cosigner_key, cosigner) = signer("cosigner");
-        let message = MessageV0 {
-            header: MessageHeader {
-                num_required_signatures: 2,
-                num_readonly_signed_accounts: 1,
-                num_readonly_unsigned_accounts: 1,
-            },
-            account_keys: vec![payer, cosigner, key("program")],
-            instructions: vec![CompiledInstruction {
-                program_id_index: 2,
-                accounts: vec![0, 1],
-                data: vec![],
-            }],
-            ..MessageV0::default()
-        };
-        let mut tx = VersionedTransaction::new(message.into());
-        assert_eq!(tx.signatures, vec![SignatureBytes::default(); 2]);
-        assert!(!tx.is_signed());
-        assert_eq!(tx.verify(), Err(SolanaError::MissingSigner(payer)));
-
-        // Signatures land at the signer's index regardless of key order.
-        tx.partial_sign(&[&cosigner_key]).unwrap();
-        assert!(tx.signatures[0].is_placeholder());
-        assert!(!tx.signatures[1].is_placeholder());
-        assert_eq!(
-            tx.clone().sign(&[&cosigner_key]),
-            Err(SolanaError::MissingSigner(payer))
-        );
-
-        tx.sign(&[&cosigner_key, &payer_key]).unwrap();
-        assert!(tx.is_signed());
-        assert_eq!(tx.verify(), Ok(()));
-        assert_eq!(crate::crypto::verify_transaction(&tx), Ok(()));
-        assert_eq!(
-            VersionedTransaction::deserialize(&tx.serialize().unwrap()),
-            Ok(tx.clone())
-        );
-
-        let (stranger_key, stranger) = signer("stranger");
-        assert_eq!(
-            tx.partial_sign(&[&stranger_key]),
-            Err(SolanaError::UnexpectedSigner(stranger))
-        );
-
-        let mut tampered = tx.clone();
-        tampered.message.set_recent_blockhash([1; 32]);
-        assert_eq!(tampered.verify(), Err(SolanaError::InvalidSignature));
-    }
-
-    #[test]
-    fn duplicate_signer_keys_get_every_slot() {
-        let (payer_key, payer) = signer("payer");
-        // Sanitize allows a repeated key; the runtime rejects it later, but signing
-        // must still fill both slots, as the Solana SDK does.
-        let message = Message {
+    fn duplicated_signer_message() -> Message {
+        let payer = signer("payer").pubkey;
+        // Sanitize allows a repeated key (the runtime rejects it later).
+        Message {
             header: MessageHeader {
                 num_required_signatures: 2,
                 num_readonly_signed_accounts: 0,
@@ -762,17 +543,42 @@ mod tests {
                 data: vec![],
             }],
             ..Message::default()
-        };
-        let mut tx = Transaction::new(message);
-        tx.sign(&[&payer_key]).unwrap();
-        assert_eq!(tx.signatures[0], tx.signatures[1]);
-        assert_eq!(tx.verify(), Ok(()));
+        }
+    }
+
+    #[test]
+    fn add_signature_places_external_signatures() {
+        let (payer, cosigner) = (signer("payer").pubkey, signer("cosigner").pubkey);
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instructions([
+            system::transfer(&payer, &key("recipient"), 1),
+            system::transfer(&cosigner, &key("recipient"), 1),
+        ]);
+        let mut tx = builder.build().unwrap();
+        let (a, b) = (SignatureBytes::new([1; 64]), SignatureBytes::new([2; 64]));
+
+        tx.add_signature(&cosigner, b).unwrap();
+        assert_eq!(tx.signatures, vec![SignatureBytes::default(), b]);
+        assert!(!tx.is_signed());
+        tx.add_signature(&payer, a).unwrap();
+        assert_eq!(tx.signatures, vec![a, b]);
+        assert!(tx.is_signed());
+
+        let stranger = key("stranger");
+        assert_eq!(
+            tx.add_signature(&stranger, a),
+            Err(SolanaError::UnexpectedSigner(stranger))
+        );
+
+        // A key in several signer slots gets the signature in each.
+        let mut duplicated = VersionedTransaction::new(duplicated_signer_message().into());
+        duplicated.add_signature(&payer, a).unwrap();
+        assert_eq!(duplicated.signatures, vec![a, a]);
     }
 
     #[test]
     fn setters_clear_stale_signatures() {
-        let (payer_key, payer) = signer("payer");
-        let (cosigner_key, cosigner) = signer("cosigner");
+        let (payer, cosigner) = (signer("payer").pubkey, signer("cosigner").pubkey);
         let transfer = |from: &Pubkey| system::transfer(from, &key("recipient"), 1);
         let mut builder = TransactionBuilder::new(payer, [0; 32]);
         builder.add_instructions([
@@ -782,22 +588,21 @@ mod tests {
             transfer(&cosigner),
         ]);
         let sign_all = |tx: &mut VersionedTransaction| {
-            tx.sign(&[&payer_key, &cosigner_key]).unwrap();
+            tx.add_signature(&payer, SignatureBytes::new([1; 64]))
+                .unwrap();
+            tx.add_signature(&cosigner, SignatureBytes::new([2; 64]))
+                .unwrap();
             assert!(tx.is_signed());
         };
 
-        let mut legacy = VersionedTransaction::from(builder.build().unwrap());
+        let mut legacy = builder.build().unwrap();
         sign_all(&mut legacy);
         // Writing the current value keeps the signatures.
         assert_eq!(legacy.set_compute_unit_price(1), Ok(true));
         assert!(legacy.is_signed());
         assert_eq!(legacy.set_compute_unit_price(2), Ok(true));
         assert!(!legacy.is_signed());
-        // Re-signing with one key must not leave the other stale signature behind.
-        assert_eq!(
-            legacy.sign(&[&payer_key]),
-            Err(SolanaError::MissingSigner(cosigner))
-        );
+        assert!(legacy.signatures.iter().all(SignatureBytes::is_placeholder));
         sign_all(&mut legacy);
         assert_eq!(legacy.set_compute_unit_limit(2), Ok(true));
         assert!(!legacy.is_signed());
@@ -816,8 +621,127 @@ mod tests {
         assert!(v1.is_signed());
         v1.set_compute_unit_limit(9).unwrap();
         assert!(!v1.is_signed());
-        sign_all(&mut v1);
-        assert_eq!(v1.verify(), Ok(()));
+    }
+
+    #[cfg(feature = "signing")]
+    mod signing {
+        use super::*;
+        use crate::crypto::{get_public_key, hash_data};
+        use crate::types::MessageV0;
+
+        fn keypair(label: &str) -> ([u8; 32], Pubkey) {
+            let private_key = hash_data(label.as_bytes());
+            let pubkey = Pubkey::new(get_public_key(&private_key).unwrap());
+            (private_key, pubkey)
+        }
+
+        #[test]
+        fn sign_and_verify() {
+            let (payer_key, payer) = keypair("payer");
+            let (cosigner_key, cosigner) = keypair("cosigner");
+            let message = MessageV0 {
+                header: MessageHeader {
+                    num_required_signatures: 2,
+                    num_readonly_signed_accounts: 1,
+                    num_readonly_unsigned_accounts: 1,
+                },
+                account_keys: vec![payer, cosigner, key("program")],
+                instructions: vec![CompiledInstruction {
+                    program_id_index: 2,
+                    accounts: vec![0, 1],
+                    data: vec![],
+                }],
+                ..MessageV0::default()
+            };
+            let mut tx = VersionedTransaction::new(message.into());
+            assert_eq!(tx.signatures, vec![SignatureBytes::default(); 2]);
+            assert!(!tx.is_signed());
+            assert_eq!(tx.verify(), Err(SolanaError::MissingSigner(payer)));
+
+            // Signatures land at the signer's index regardless of key order.
+            tx.partial_sign(&[&cosigner_key]).unwrap();
+            assert!(tx.signatures[0].is_placeholder());
+            assert!(!tx.signatures[1].is_placeholder());
+            assert_eq!(
+                tx.clone().sign(&[&cosigner_key]),
+                Err(SolanaError::MissingSigner(payer))
+            );
+
+            tx.sign(&[&cosigner_key, &payer_key]).unwrap();
+            assert!(tx.is_signed());
+            assert_eq!(tx.verify(), Ok(()));
+            assert_eq!(crate::crypto::verify_transaction(&tx), Ok(()));
+            assert_eq!(
+                VersionedTransaction::deserialize(&tx.serialize().unwrap()),
+                Ok(tx.clone())
+            );
+
+            // An externally made signature verifies the same way.
+            let mut external = VersionedTransaction::new(tx.message.clone());
+            let message_data = external.serialize_message().unwrap();
+            for key in [payer_key, cosigner_key] {
+                let pubkey = Pubkey::new(get_public_key(&key).unwrap());
+                let signature = crate::crypto::sign_message(&key, &message_data).unwrap();
+                external.add_signature(&pubkey, signature).unwrap();
+            }
+            assert_eq!(external, tx);
+
+            let (stranger_key, stranger) = keypair("stranger");
+            assert_eq!(
+                tx.partial_sign(&[&stranger_key]),
+                Err(SolanaError::UnexpectedSigner(stranger))
+            );
+
+            let mut tampered = tx.clone();
+            tampered.message.set_recent_blockhash([1; 32]);
+            assert_eq!(tampered.verify(), Err(SolanaError::InvalidSignature));
+        }
+
+        #[test]
+        fn duplicate_signer_keys_get_every_slot() {
+            let mut tx = VersionedTransaction::new(duplicated_signer_message().into());
+            tx.sign(&[&signer("payer").private_key]).unwrap();
+            assert_eq!(tx.signatures[0], tx.signatures[1]);
+            assert_eq!(tx.verify(), Ok(()));
+        }
+
+        #[test]
+        fn resigning_after_a_change_needs_every_signer() {
+            let (payer_key, payer) = keypair("payer");
+            let (cosigner_key, cosigner) = keypair("cosigner");
+            let mut builder = TransactionBuilder::new(payer, [0; 32]);
+            builder.add_instructions([
+                compute_budget::set_compute_unit_price(1),
+                system::transfer(&cosigner, &key("recipient"), 1),
+            ]);
+            let mut tx = builder.build().unwrap();
+            tx.sign(&[&payer_key, &cosigner_key]).unwrap();
+            assert_eq!(tx.set_compute_unit_price(2), Ok(true));
+            assert_eq!(
+                tx.sign(&[&payer_key]),
+                Err(SolanaError::MissingSigner(cosigner))
+            );
+            tx.sign(&[&payer_key, &cosigner_key]).unwrap();
+            assert_eq!(tx.verify(), Ok(()));
+        }
+
+        #[test]
+        fn builder_transactions_sign_and_verify() {
+            let (payer_key, payer) = keypair("payer");
+            let mut builder = TransactionBuilder::new(payer, [7; 32]);
+            builder.add_instruction(system::transfer(&payer, &key("recipient"), 1));
+            for mut tx in [
+                builder.build().unwrap(),
+                builder.build_v0(&[]).unwrap(),
+                builder.build_v1(scenarios::full_config()).unwrap(),
+            ] {
+                assert!(!tx.is_signed());
+                tx.sign(&[&payer_key]).unwrap();
+                assert!(tx.is_signed());
+                assert_eq!(tx.verify(), Ok(()));
+                assert_eq!(tx.validate_size(), Ok(()));
+            }
+        }
     }
 
     #[test]
@@ -834,7 +758,7 @@ mod tests {
             compute_budget::set_compute_unit_price(7),
         ]);
         // The runtime fails the transaction, so nothing is requested.
-        let mut tx = VersionedTransaction::from(builder.build().unwrap());
+        let mut tx = builder.build().unwrap();
         assert_eq!(tx.get_compute_unit_limit(), None);
         assert_eq!(tx.get_compute_unit_price(), None);
         assert_eq!(tx.set_compute_unit_price(8), Ok(false));
@@ -844,31 +768,8 @@ mod tests {
             compute_budget::set_compute_unit_limit(5),
             compute_budget::set_compute_unit_limit(6),
         ]);
-        let tx = VersionedTransaction::from(builder.build().unwrap());
+        let tx = builder.build().unwrap();
         assert_eq!(tx.get_compute_unit_limit(), None);
-    }
-
-    #[test]
-    fn legacy_transaction_shares_the_versioned_implementation() {
-        let (payer_key, payer) = signer("payer");
-        let mut builder = TransactionBuilder::new(payer, [7; 32]);
-        builder.add_instruction(system::transfer(&payer, &key("recipient"), 1));
-        let mut tx = builder.build().unwrap();
-        assert_eq!(tx.signatures, vec![SignatureBytes::default()]);
-        assert!(!tx.is_signed());
-
-        tx.sign(&[&payer_key]).unwrap();
-        assert!(tx.is_signed());
-        assert_eq!(tx.verify(), Ok(()));
-        assert_eq!(tx.validate_size(), Ok(()));
-
-        let versioned = VersionedTransaction::from(tx.clone());
-        assert_eq!(versioned.serialize().unwrap(), tx.serialize().unwrap());
-        assert_eq!(
-            versioned.serialize_message().unwrap(),
-            tx.message_data().unwrap()
-        );
-        assert_eq!(versioned.verify(), Ok(()));
     }
 
     #[test]
@@ -897,7 +798,7 @@ mod tests {
             system::advance_nonce_account(&key("nonce"), &payer),
             system::transfer(&payer, &key("recipient"), 1),
         ]);
-        let tx = VersionedTransaction::from(builder.build().unwrap());
+        let tx = builder.build().unwrap();
         assert!(tx.uses_durable_nonce());
         assert!(!decode(LEGACY_TX).uses_durable_nonce());
     }
@@ -913,6 +814,7 @@ mod tests {
             tx.message.transaction_config(),
             Some(&scenarios::full_config())
         );
+        #[cfg(feature = "signing")]
         assert_eq!(tx.verify(), Ok(()));
 
         // Config values, never Compute Budget instructions.
@@ -1018,7 +920,7 @@ mod tests {
         };
         let mut builder = TransactionBuilder::new(payer, [0; 32]);
         builder.add_instruction(big_instruction(1200));
-        let legacy = VersionedTransaction::from(builder.build().unwrap());
+        let legacy = builder.build().unwrap();
         let bytes = legacy.serialize().unwrap();
         assert!(bytes.len() > MAX_TRANSACTION_SIZE);
         assert_eq!(
@@ -1149,7 +1051,7 @@ mod tests {
         bytes.extend_from_slice(&[1, 1, 1, 0, 0]);
         assert_eq!(
             VersionedTransaction::deserialize(&bytes),
-            Err(DecodeError::NonCanonicalShortU16.into())
+            Err(DecodeError::NonCanonicalCompactU16.into())
         );
     }
 

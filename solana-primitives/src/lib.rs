@@ -4,12 +4,13 @@
 //! Byte encodings are checked against the Solana SDK with golden vectors.
 //!
 //! ```
+//! # #[cfg(feature = "signing")]
+//! # fn main() -> solana_primitives::Result<()> {
 //! use solana_primitives::{
 //!     Pubkey, TransactionBuilder, TransactionConfig, VersionedTransaction, get_public_key,
 //!     instructions::{compute_budget, system},
 //! };
 //!
-//! # fn main() -> solana_primitives::Result<()> {
 //! let private_key = [7u8; 32];
 //! let payer = Pubkey::new(get_public_key(&private_key)?);
 //! let recipient = Pubkey::from_str_const("4fYNw3dojWmQ4dXtSGE9epjRGy9uFrCRgbvGgQBNZCQF");
@@ -38,10 +39,19 @@
 //! parsed.verify()?;
 //! # Ok(())
 //! # }
+//! # #[cfg(not(feature = "signing"))]
+//! # fn main() {}
 //! ```
+//!
+//! Signing somewhere else (a hardware wallet, a remote signer) works without the
+//! `signing` feature: sign [`VersionedTransaction::serialize_message`] and attach
+//! the result with [`VersionedTransaction::add_signature`].
 //!
 //! # Features
 //!
+//! - `signing` (default): Ed25519 key derivation, signing, and verification
+//!   through `ed25519-dalek`. Without it the crate depends only on `bs58`, `sha2`,
+//!   and `curve25519-dalek` (for program-derived addresses).
 //! - `serde`: Serde for the Rust data model (pubkeys and signatures as base58).
 //!   This is not the wire format; use `serialize`/`deserialize` for that.
 //! - `borsh`: Borsh for [`Pubkey`] and [`SignatureBytes`].
@@ -53,7 +63,7 @@ mod compiler;
 pub mod crypto;
 pub mod error;
 pub mod instructions;
-pub mod short_vec;
+mod short_vec;
 pub mod types;
 mod wire;
 
@@ -64,7 +74,4 @@ pub use builder::{InstructionBuilder, InstructionDataBuilder, TransactionBuilder
 pub use crypto::*;
 pub use error::{CompileError, DecodeError, EncodeError, Result, SanitizeError, SolanaError};
 pub use instructions::*;
-#[cfg(feature = "serde")]
-pub use short_vec::ShortVec;
-pub use short_vec::{ShortU16, decode_compact_u16_len, encode_length_to_compact_u16_bytes};
 pub use types::*;

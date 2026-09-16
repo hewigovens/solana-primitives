@@ -76,7 +76,9 @@ impl<'a> WireReader<'a> {
     }
 
     pub fn read_short_u16(&mut self) -> Result<u16, DecodeError> {
-        short_vec::decode(|| Ok(self.read_u8().ok()), |err| err)
+        let (value, len) = short_vec::decode(self.bytes)?;
+        self.bytes = &self.bytes[len..];
+        Ok(value)
     }
 
     /// Read a compact-u16 count of items that each occupy at least `min_item_len` bytes,
@@ -398,9 +400,9 @@ pub(crate) fn read_message(reader: &mut WireReader) -> Result<VersionedMessage, 
 }
 
 /// Legacy/v0 envelope: one-byte signature count, signatures, then the message.
-pub(crate) fn encode_legacy_envelope(
+fn encode_legacy_envelope(
     signatures: &[SignatureBytes],
-    write_message: impl FnOnce(&mut Vec<u8>) -> Result<(), EncodeError>,
+    message: &VersionedMessage,
 ) -> Result<Vec<u8>, EncodeError> {
     // The count must fit in one byte: a set high bit would read as a message version.
     let num_signatures = u8::try_from(signatures.len())
@@ -415,7 +417,7 @@ pub(crate) fn encode_legacy_envelope(
     for signature in signatures {
         out.extend_from_slice(signature.as_bytes());
     }
-    write_message(&mut out)?;
+    write_message(&mut out, message)?;
     Ok(out)
 }
 
@@ -444,9 +446,7 @@ pub(crate) fn encode_transaction(
 ) -> Result<Vec<u8>, EncodeError> {
     match &transaction.message {
         VersionedMessage::V1(message) => encode_v1_envelope(&transaction.signatures, message),
-        message => {
-            encode_legacy_envelope(&transaction.signatures, |out| write_message(out, message))
-        }
+        message => encode_legacy_envelope(&transaction.signatures, message),
     }
 }
 

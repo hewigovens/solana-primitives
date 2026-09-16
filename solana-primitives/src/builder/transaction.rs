@@ -1,6 +1,6 @@
 use crate::{
     AddressLookupTableAccount, Instruction, Message, MessageV0, MessageV1, Pubkey, Result,
-    Transaction, TransactionConfig, VersionedMessage, VersionedTransaction,
+    TransactionConfig, VersionedMessage, VersionedTransaction,
 };
 
 /// Collects instructions and compiles them into a transaction.
@@ -43,11 +43,10 @@ impl TransactionBuilder {
     }
 
     /// Build a legacy transaction.
-    pub fn build(&self) -> Result<Transaction> {
+    pub fn build(&self) -> Result<VersionedTransaction> {
         let message =
             Message::try_compile(&self.fee_payer, &self.instructions, self.recent_blockhash)?;
-        message.sanitize()?;
-        Ok(Transaction::new(message))
+        Self::finish(message.into())
     }
 
     /// Build a v0 transaction, loading eligible accounts from `address_lookup_tables`.
@@ -120,21 +119,30 @@ mod tests {
         builder
     }
 
-    fn sign(mut tx: VersionedTransaction, signers: &[&str]) -> Vec<u8> {
-        let keys: Vec<[u8; 32]> = signers.iter().map(|s| signer(s).private_key).collect();
-        let keys: Vec<&[u8]> = keys.iter().map(|k| &k[..]).collect();
-        tx.sign(&keys).unwrap();
-        tx.serialize().unwrap()
-    }
-
-    /// Build, sign, and compare with the upstream transaction; also decode the
-    /// upstream bytes back into the same transaction.
+    /// Check a built, unsigned transaction against the upstream signed one: same
+    /// message, and the same bytes once signed (or once upstream's signatures are
+    /// attached, without the `signing` feature).
     fn assert_matches_upstream(tx: VersionedTransaction, signers: &[&str], expected: &[u8]) {
-        let bytes = sign(tx, signers);
-        assert_eq!(bytes, expected);
-        let decoded = VersionedTransaction::deserialize(expected).unwrap();
-        assert_eq!(decoded.verify(), Ok(()));
-        assert_eq!(decoded.serialize().unwrap(), expected);
+        let upstream = VersionedTransaction::deserialize(expected).unwrap();
+        assert_eq!(tx.serialize_message(), upstream.serialize_message());
+
+        let mut attached = tx.clone();
+        for (key, signature) in upstream.account_keys().iter().zip(&upstream.signatures) {
+            attached.add_signature(key, *signature).unwrap();
+        }
+        assert_eq!(attached.serialize().unwrap(), expected);
+
+        #[cfg(feature = "signing")]
+        {
+            let keys: Vec<[u8; 32]> = signers.iter().map(|s| signer(s).private_key).collect();
+            let keys: Vec<&[u8]> = keys.iter().map(|k| &k[..]).collect();
+            let mut signed = tx;
+            signed.sign(&keys).unwrap();
+            assert_eq!(signed.serialize().unwrap(), expected);
+            assert_eq!(upstream.verify(), Ok(()));
+        }
+        #[cfg(not(feature = "signing"))]
+        let _ = signers;
     }
 
     #[test]
@@ -151,7 +159,7 @@ mod tests {
         for (instructions, signers, expected) in cases {
             let tx = builder(instructions).build().unwrap();
             assert!(!tx.is_signed());
-            assert_matches_upstream(tx.into(), signers, expected);
+            assert_matches_upstream(tx, signers, expected);
         }
     }
 
@@ -219,9 +227,9 @@ mod tests {
         let v1 = builder(scenarios::complex_without_compute_budget())
             .build_v1(scenarios::full_config())
             .unwrap();
-        assert_eq!(v1.header(), &legacy.message.header);
-        assert_eq!(v1.account_keys(), &legacy.message.account_keys[..]);
-        assert_eq!(v1.instructions(), &legacy.message.instructions[..]);
+        assert_eq!(v1.header(), legacy.header());
+        assert_eq!(v1.account_keys(), legacy.account_keys());
+        assert_eq!(v1.instructions(), legacy.instructions());
     }
 
     #[test]
@@ -316,7 +324,7 @@ mod tests {
     fn roundtrips_opaque_instruction_data() {
         let fee_payer = Pubkey::from_str_const("A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC");
         let recent_blockhash =
-            Pubkey::from_str_const("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd");
+            crate::decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd").unwrap();
         let instruction = InstructionBuilder::new(Pubkey::from_str_const(
             "J88B7gmadHzTNGiy54c9Ms8BsEXNdB2fntFyhKpk3qoT",
         ))
@@ -349,13 +357,13 @@ mod tests {
         ])
         .build();
 
-        let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash.to_bytes());
+        let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash);
         tx_builder.add_instruction(instruction);
         let transaction = tx_builder.build().unwrap();
         let wire_bytes = transaction.serialize().unwrap();
         assert_eq!(
             VersionedTransaction::deserialize(&wire_bytes),
-            Ok(VersionedTransaction::from(transaction))
+            Ok(transaction)
         );
     }
 
@@ -647,8 +655,8 @@ mod tests {
             .add_instruction(transfer(&payer, &recipient, 1))
             .add_instructions([transfer(&payer, &recipient, 2)]);
         let tx = builder.build().unwrap();
-        assert_eq!(tx.message.instructions.len(), 2);
-        assert_eq!(tx.message.instructions[1].data[4], 2);
+        assert_eq!(tx.instructions().len(), 2);
+        assert_eq!(tx.instructions()[1].data[4], 2);
         assert_eq!(tx.signatures, vec![SignatureBytes::default()]);
     }
 }

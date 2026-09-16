@@ -1,6 +1,6 @@
 use crate::error::{Result, SolanaError};
 use crate::types::Pubkey;
-use ed25519_dalek::VerifyingKey;
+use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest, Sha256};
 
 /// Maximum number of seeds allowed in a PDA, including the bump seed.
@@ -80,7 +80,7 @@ fn derive_program_address(program_id: &Pubkey, seeds: &[&[u8]], bump: u8) -> Opt
 
 /// Whether `bytes` decompress to an Ed25519 point, matching Solana's `bytes_are_curve_point`.
 pub(crate) fn is_on_curve(bytes: &[u8; 32]) -> bool {
-    VerifyingKey::from_bytes(bytes).is_ok()
+    CompressedEdwardsY(*bytes).decompress().is_some()
 }
 
 #[cfg(test)]
@@ -133,6 +133,39 @@ mod tests {
             (address, bump),
             (pubkey("46GZzzetjCURsdFPb7rcnspbEMnCBXe9kpjrsZAkKb6X"), 254)
         );
+    }
+
+    #[test]
+    fn create_program_address_matches_solana_sdk_tests() {
+        // Vectors from `solana-address`'s own `test_create_program_address`, where the
+        // last seed plays the role of the bump.
+        let program_id = pubkey("BPFLoaderUpgradeab1e11111111111111111111111");
+        let seed_pubkey = pubkey("SeedPubey1111111111111111111111111111111111");
+        let cases: [(&[&[u8]], u8, &str); 4] = [
+            (&[b""], 1, "BwqrghZA2htAcqq8dzP1WDAhTXYTYWj7CHxF5j7TDBAe"),
+            (
+                &["\u{2609}".as_bytes()],
+                0,
+                "13yWmRpaTR4r5nAktwLqMpRNr28tnVUZw26rTvPSSB19",
+            ),
+            // Seeds are hashed without separators: ["Talking", "Squirrels"].
+            (
+                &[b"Talking", b"Squirrel"],
+                b's',
+                "2fnQrngrQT4SeLcdToJAD96phoEjNL2man2kfRLCASVk",
+            ),
+            (
+                &[seed_pubkey.as_bytes()],
+                1,
+                "976ymqVnfE32QFe6NfGDctSvVa36LWnvYxhU6G2232YL",
+            ),
+        ];
+        for (seeds, bump, expected) in cases {
+            assert_eq!(
+                create_program_address(&program_id, seeds, bump),
+                Ok(pubkey(expected))
+            );
+        }
     }
 
     #[test]

@@ -10,14 +10,14 @@ A lightweight Rust crate for building, signing, serializing, and parsing Solana 
 ## Features
 
 - **All transaction versions**: legacy, v0 (address lookup tables), and v1 ([SIMD-0385](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0385-transaction-v1.md): transactions up to 4096 bytes, compute budget in the message config)
-- **Core types**: `Pubkey`, `SignatureBytes`, `Instruction`, `AccountMeta`, `Message`, `MessageV0`, `MessageV1`, `VersionedMessage`, `Transaction`, `VersionedTransaction`
+- **Core types**: `Pubkey`, `SignatureBytes`, `Instruction`, `AccountMeta`, `Message`, `MessageV0`, `MessageV1`, `VersionedMessage`, and one `VersionedTransaction` type for every version
 - **Builders**: `TransactionBuilder` merges account roles and orders keys the same way the Solana SDK does; `InstructionBuilder` and `InstructionDataBuilder` for custom instructions
 - **Strict wire codec**: canonical compact-u16 lengths, no trailing bytes, per-version size limits, and Solana's sanitization rules on every `deserialize`
-- **Signing and verification** for every version
+- **Signing and verification** for every version, or attach signatures made elsewhere (hardware wallets, remote signers)
 - **Program helpers**: System, SPL Token (and Token-2022), Associated Token Account, Compute Budget, Memo, Anchor discriminators
 - **PDAs**: `find_program_address`, `create_program_address`, `create_with_seed`
 - **Verified encodings**: golden vectors generated with the Solana SDK (`solana-message` 5.0, `solana-transaction` 5.0, `solana-system-interface`, `spl-token-interface`, `spl-associated-token-account-interface`)
-- **Small dependency footprint**: `ed25519-dalek`, `bs58`, and `sha2` by default
+- **Small dependency footprint**: `bs58`, `sha2`, and `curve25519-dalek`, plus `ed25519-dalek` for the default `signing` feature
 
 ## Usage
 
@@ -30,6 +30,7 @@ Optional features:
 
 | Feature | Adds |
 |---|---|
+| `signing` (default) | Ed25519 key derivation, `sign`/`partial_sign`/`verify` via `ed25519-dalek`. Disable it if you sign elsewhere. |
 | `serde` | Serde for the Rust data model (pubkeys and signatures as base58 strings). Not the transaction wire format. |
 | `borsh` | Borsh for `Pubkey` and `SignatureBytes`. Not the transaction wire format. |
 
@@ -39,7 +40,8 @@ Use `serialize()` / `deserialize()` for the bytes you send to or receive from th
 
 ```rust
 use solana_primitives::{
-    InstructionBuilder, InstructionDataBuilder, Pubkey, TransactionBuilder, get_public_key,
+    InstructionBuilder, InstructionDataBuilder, Pubkey, TransactionBuilder, decode_blockhash,
+    get_public_key,
     instructions::{program_ids::system_program, system::transfer},
 };
 
@@ -47,7 +49,8 @@ fn main() -> solana_primitives::Result<()> {
     let private_key = [7u8; 32];
     let fee_payer = Pubkey::new(get_public_key(&private_key)?);
     let recipient = Pubkey::from_base58("4fYNw3dojWmQ4dXtSGE9epjRGy9uFrCRgbvGgQBNZCQF")?;
-    let recent_blockhash = [0u8; 32]; // from `getLatestBlockhash`
+    // The base58 blockhash from `getLatestBlockhash`.
+    let recent_blockhash = decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd")?;
 
     // A pre-built instruction...
     let transfer_instruction = transfer(&fee_payer, &recipient, 1_000_000);
@@ -69,6 +72,19 @@ fn main() -> solana_primitives::Result<()> {
     let wire_bytes = transaction.serialize()?; // base64-encode for `sendTransaction`
     Ok(())
 }
+```
+
+### Signing elsewhere
+
+With or without the `signing` feature, sign the message bytes with your own key
+store and attach each signature to its signer's slot:
+
+```rust
+let mut transaction = builder.build()?;
+let message = transaction.serialize_message()?;
+let signature = hardware_wallet.sign(&message)?; // any Ed25519 signer
+transaction.add_signature(&fee_payer, SignatureBytes::new(signature))?;
+assert!(transaction.is_signed());
 ```
 
 ### v1 transaction

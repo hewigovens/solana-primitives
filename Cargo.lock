@@ -328,6 +328,7 @@ dependencies = [
  "base64",
  "borsh",
  "bs58",
+ "curve25519-dalek",
  "ed25519-dalek",
  "hexlit",
  "serde",
