@@ -1,9 +1,11 @@
 //! Instruction lists used to generate [`super::vectors`].
 
 use super::{key, signer};
-use crate::instructions::program_ids::{recent_blockhashes_sysvar, token_program};
+use crate::instructions::program_ids::{recent_blockhashes_sysvar, system_program, token_program};
 use crate::instructions::{associated_token, compute_budget, memo, system, token};
-use crate::types::{AccountMeta, AddressLookupTableAccount, Instruction};
+use crate::types::{
+    AccountMeta, AddressLookupTableAccount, Instruction, Pubkey, TransactionConfig,
+};
 
 /// One SOL transfer from `payer`.
 pub fn simple() -> Vec<Instruction> {
@@ -134,4 +136,119 @@ pub fn nonce_lookup_table() -> AddressLookupTableAccount {
             recent_blockhashes_sysvar(),
         ],
     )
+}
+
+/// Every v1 config field set.
+pub fn full_config() -> TransactionConfig {
+    TransactionConfig::new()
+        .with_priority_fee(12_345)
+        .with_compute_unit_limit(300_000)
+        .with_loaded_accounts_data_size_limit(65_536)
+        .with_heap_size(65_536)
+}
+
+/// A v1 config with a gap in the mask (no fee, no loaded accounts limit).
+pub fn partial_config() -> TransactionConfig {
+    TransactionConfig::new()
+        .with_compute_unit_limit(50_000)
+        .with_heap_size(32 * 1024)
+}
+
+/// One randomly generated compile case.
+pub struct RandomCase {
+    pub payer: Pubkey,
+    pub instructions: Vec<Instruction>,
+    pub lookup_tables: Vec<AddressLookupTableAccount>,
+    pub config: TransactionConfig,
+    pub blockhash: [u8; 32],
+}
+
+/// xorshift64, matching the generator used for the upstream digests.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn chance(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+}
+
+/// 500 random instruction lists over a 40-key pool: random roles, programs that
+/// are also accounts, a leading durable nonce 20% of the time, up to three
+/// lookup tables with repeated entries, and random (often invalid) v1 configs.
+pub fn random_cases() -> Vec<RandomCase> {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let pool: Vec<Pubkey> = (0..40).map(|i| key(&format!("k{i}"))).collect();
+    let pick = |rng: &mut Rng| pool[rng.below(pool.len() as u64) as usize];
+    (0..500)
+        .map(|case| {
+            let payer = pick(&mut rng);
+            let mut instructions = Vec::new();
+            if rng.chance(20) {
+                let nonce = pick(&mut rng);
+                let authority = pick(&mut rng);
+                instructions.push(system::advance_nonce_account(&nonce, &authority));
+            }
+            for _ in 0..1 + rng.below(5) {
+                let program_id = if rng.chance(10) {
+                    system_program()
+                } else {
+                    pick(&mut rng)
+                };
+                let accounts = (0..rng.below(7))
+                    .map(|_| {
+                        let pubkey = pick(&mut rng);
+                        let is_signer = rng.chance(25);
+                        let is_writable = rng.chance(50);
+                        AccountMeta::new(pubkey, is_signer, is_writable)
+                    })
+                    .collect();
+                let data = (0..rng.below(10)).map(|_| rng.next() as u8).collect();
+                instructions.push(Instruction {
+                    program_id,
+                    accounts,
+                    data,
+                });
+            }
+            let lookup_tables = (0..rng.below(4))
+                .map(|table| {
+                    let addresses = (0..rng.below(25)).map(|_| pick(&mut rng)).collect();
+                    AddressLookupTableAccount::new(
+                        key(&format!("case{case}table{table}")),
+                        addresses,
+                    )
+                })
+                .collect();
+            let mut config = TransactionConfig::new();
+            if rng.chance(50) {
+                config = config.with_priority_fee(rng.next());
+            }
+            if rng.chance(50) {
+                config = config.with_compute_unit_limit(rng.next() as u32);
+            }
+            if rng.chance(50) {
+                config = config.with_loaded_accounts_data_size_limit(rng.next() as u32);
+            }
+            if rng.chance(50) {
+                config = config.with_heap_size(rng.next() as u32);
+            }
+            RandomCase {
+                payer,
+                instructions,
+                lookup_tables,
+                config,
+                blockhash: crate::crypto::hash_data(format!("case{case}").as_bytes()),
+            }
+        })
+        .collect()
 }

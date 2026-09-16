@@ -188,8 +188,10 @@ mod tests {
     use super::*;
     use crate::instructions::program_ids::system_program;
     use crate::instructions::system::{advance_nonce_account, transfer};
-    use crate::test_utils::key;
-    use crate::types::AccountMeta;
+    use crate::test_utils::{key, scenarios};
+    use crate::types::{AccountMeta, Message, MessageV0, MessageV1};
+    use hexlit::hex;
+    use sha2::{Digest, Sha256};
 
     fn instruction(program_id: Pubkey, accounts: Vec<AccountMeta>) -> Instruction {
         Instruction {
@@ -313,6 +315,45 @@ mod tests {
                 &[]
             ),
             Err(CompileError::UnknownInstructionKey(unknown))
+        );
+    }
+
+    /// SHA-256 over the 500 messages of each version that `solana-message` 5.0
+    /// (`Message::new_with_blockhash`, `v0::Message::try_compile`,
+    /// `v1::Message::try_compile_with_config`) produced for `scenarios::random_cases`.
+    #[test]
+    fn random_instructions_compile_like_upstream() {
+        let mut digests = [Sha256::new(), Sha256::new(), Sha256::new()];
+        for case in scenarios::random_cases() {
+            let legacy = Message::try_compile(&case.payer, &case.instructions, case.blockhash);
+            let v0 = MessageV0::try_compile(
+                &case.payer,
+                &case.instructions,
+                &case.lookup_tables,
+                case.blockhash,
+            );
+            let v1 = MessageV1::try_compile(
+                &case.payer,
+                &case.instructions,
+                case.blockhash,
+                case.config,
+            );
+            digests[0].update(legacy.unwrap().serialize().unwrap());
+            digests[1].update(v0.unwrap().serialize().unwrap());
+            digests[2].update(v1.unwrap().serialize().unwrap());
+        }
+        let [legacy, v0, v1] = digests.map(|digest| <[u8; 32]>::from(digest.finalize()));
+        assert_eq!(
+            legacy,
+            hex!("0a45a0415ee447108daaa0973a70c418ef9539e3faf6af05acf25947495564a1")
+        );
+        assert_eq!(
+            v0,
+            hex!("b694634ecb45447547137f7e3567147d0c76d9d21ef7614b0be6dda8ab6164de")
+        );
+        assert_eq!(
+            v1,
+            hex!("04bb0830fcfdaf1568ca537dd4d8dd5120496fc617940fa9b88820c552bde040")
         );
     }
 }

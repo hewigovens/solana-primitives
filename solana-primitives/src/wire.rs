@@ -2,11 +2,13 @@
 //!
 //! Legacy and v0 transactions are `compact-u16 signature count || signatures ||
 //! message`. A v0 message is the legacy body prefixed with `0x80` and followed
-//! by address table lookups. Decoding is strict: every length must be
-//! canonical and the input must be consumed exactly.
+//! by address table lookups. A v1 transaction is `0x81 || message ||
+//! signatures`, with fixed-width counts (see [`crate::types::v1`]). Decoding is
+//! strict: every length must be canonical and the input must be consumed exactly.
 
 use crate::error::{DecodeError, EncodeError};
 use crate::short_vec;
+use crate::types::v1::{self, MessageV1, TransactionConfig, TransactionConfigMask};
 use crate::types::{
     CompiledInstruction, Message, MessageAddressTableLookup, MessageHeader, MessageV0, Pubkey,
     SignatureBytes, VersionedMessage, VersionedTransaction,
@@ -59,6 +61,18 @@ impl<'a> WireReader<'a> {
 
     pub fn read_u8(&mut self) -> Result<u8, DecodeError> {
         self.read_array::<1>().map(|[byte]| byte)
+    }
+
+    pub fn read_u16_le(&mut self) -> Result<u16, DecodeError> {
+        self.read_array().map(u16::from_le_bytes)
+    }
+
+    pub fn read_u32_le(&mut self) -> Result<u32, DecodeError> {
+        self.read_array().map(u32::from_le_bytes)
+    }
+
+    pub fn read_u64_le(&mut self) -> Result<u64, DecodeError> {
+        self.read_array().map(u64::from_le_bytes)
     }
 
     pub fn read_short_u16(&mut self) -> Result<u16, DecodeError> {
@@ -254,6 +268,111 @@ fn read_v0_message(reader: &mut WireReader) -> Result<MessageV0, DecodeError> {
     })
 }
 
+fn u8_len(len: usize) -> Result<u8, EncodeError> {
+    u8::try_from(len).map_err(|_| EncodeError::LengthOverflow {
+        len,
+        max: u8::MAX.into(),
+    })
+}
+
+pub(crate) fn write_v1_message(out: &mut Vec<u8>, message: &MessageV1) -> Result<(), EncodeError> {
+    out.push(v1::VERSION_PREFIX);
+    write_header(out, &message.header);
+    out.extend_from_slice(&message.config.mask().0.to_le_bytes());
+    out.extend_from_slice(&message.lifetime_specifier);
+    out.push(u8_len(message.instructions.len())?);
+    out.push(u8_len(message.account_keys.len())?);
+    write_pubkeys(out, &message.account_keys);
+
+    // Values follow the mask's bit order.
+    let config = &message.config;
+    if let Some(fee) = config.priority_fee {
+        out.extend_from_slice(&fee.to_le_bytes());
+    }
+    for value in [
+        config.compute_unit_limit,
+        config.loaded_accounts_data_size_limit,
+        config.heap_size,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    // All fixed-size instruction headers come before any payload.
+    for instruction in &message.instructions {
+        let data_len =
+            u16::try_from(instruction.data.len()).map_err(|_| EncodeError::LengthOverflow {
+                len: instruction.data.len(),
+                max: u16::MAX.into(),
+            })?;
+        out.push(instruction.program_id_index);
+        out.push(u8_len(instruction.accounts.len())?);
+        out.extend_from_slice(&data_len.to_le_bytes());
+    }
+    for instruction in &message.instructions {
+        out.extend_from_slice(&instruction.accounts);
+        out.extend_from_slice(&instruction.data);
+    }
+    Ok(())
+}
+
+/// Read a v1 message after its `0x81` prefix.
+fn read_v1_message(reader: &mut WireReader) -> Result<MessageV1, DecodeError> {
+    let header = read_header(reader)?;
+    let mask = TransactionConfigMask(reader.read_u32_le()?);
+    // Unknown bits could not be re-encoded, which would change the signed bytes.
+    if !mask.is_valid() {
+        return Err(DecodeError::InvalidConfigMask(mask.0));
+    }
+    let lifetime_specifier = reader.read_array()?;
+    let num_instructions = reader.read_u8()?;
+    let num_addresses = reader.read_u8()?;
+    let account_keys = reader.read_pubkeys(num_addresses.into())?;
+
+    let config = TransactionConfig {
+        priority_fee: mask
+            .has_priority_fee()
+            .then(|| reader.read_u64_le())
+            .transpose()?,
+        compute_unit_limit: mask
+            .has_compute_unit_limit()
+            .then(|| reader.read_u32_le())
+            .transpose()?,
+        loaded_accounts_data_size_limit: mask
+            .has_loaded_accounts_data_size_limit()
+            .then(|| reader.read_u32_le())
+            .transpose()?,
+        heap_size: mask
+            .has_heap_size()
+            .then(|| reader.read_u32_le())
+            .transpose()?,
+    };
+
+    let headers = (0..num_instructions)
+        .map(|_| Ok((reader.read_u8()?, reader.read_u8()?, reader.read_u16_le()?)))
+        .collect::<Result<Vec<_>, DecodeError>>()?;
+    let instructions = headers
+        .into_iter()
+        .map(|(program_id_index, num_accounts, data_len)| {
+            Ok(CompiledInstruction {
+                program_id_index,
+                accounts: reader.read_bytes(num_accounts.into())?.to_vec(),
+                data: reader.read_bytes(data_len.into())?.to_vec(),
+            })
+        })
+        .collect::<Result<_, DecodeError>>()?;
+
+    Ok(MessageV1 {
+        header,
+        config,
+        lifetime_specifier,
+        account_keys,
+        instructions,
+    })
+}
+
 pub(crate) fn write_message(
     out: &mut Vec<u8>,
     message: &VersionedMessage,
@@ -261,6 +380,7 @@ pub(crate) fn write_message(
     match message {
         VersionedMessage::Legacy(message) => write_legacy_message(out, message),
         VersionedMessage::V0(message) => write_v0_message(out, message),
+        VersionedMessage::V1(message) => write_v1_message(out, message),
     }
 }
 
@@ -272,6 +392,7 @@ pub(crate) fn read_message(reader: &mut WireReader) -> Result<VersionedMessage, 
     reader.read_u8()?;
     match first & !MESSAGE_VERSION_PREFIX {
         0 => read_v0_message(reader).map(VersionedMessage::V0),
+        1 => read_v1_message(reader).map(VersionedMessage::V1),
         version => Err(DecodeError::UnsupportedMessageVersion(version)),
     }
 }
@@ -298,23 +419,59 @@ pub(crate) fn encode_legacy_envelope(
     Ok(out)
 }
 
+/// v1 envelope: the message, then exactly `num_required_signatures` signatures.
+fn encode_v1_envelope(
+    signatures: &[SignatureBytes],
+    message: &MessageV1,
+) -> Result<Vec<u8>, EncodeError> {
+    let expected = usize::from(message.header.num_required_signatures);
+    if signatures.len() != expected {
+        return Err(EncodeError::SignatureCountMismatch {
+            expected,
+            actual: signatures.len(),
+        });
+    }
+    let mut out = Vec::new();
+    write_v1_message(&mut out, message)?;
+    for signature in signatures {
+        out.extend_from_slice(signature.as_bytes());
+    }
+    Ok(out)
+}
+
 pub(crate) fn encode_transaction(
     transaction: &VersionedTransaction,
 ) -> Result<Vec<u8>, EncodeError> {
-    encode_legacy_envelope(&transaction.signatures, |out| {
-        write_message(out, &transaction.message)
-    })
+    match &transaction.message {
+        VersionedMessage::V1(message) => encode_v1_envelope(&transaction.signatures, message),
+        message => {
+            encode_legacy_envelope(&transaction.signatures, |out| write_message(out, message))
+        }
+    }
 }
 
 pub(crate) fn decode_transaction(bytes: &[u8]) -> Result<VersionedTransaction, DecodeError> {
     let mut reader = WireReader::new(bytes);
     let discriminator = reader.read_u8()?;
+    if discriminator == v1::VERSION_PREFIX {
+        // The signature count comes from the message header.
+        let message = read_v1_message(&mut reader)?;
+        let signatures = reader.read_signatures(message.header.num_required_signatures.into())?;
+        reader.finish()?;
+        return Ok(VersionedTransaction {
+            signatures,
+            message: VersionedMessage::V1(message),
+        });
+    }
     if discriminator & MESSAGE_VERSION_PREFIX != 0 {
         return Err(DecodeError::InvalidTransactionDiscriminator(discriminator));
     }
     // With the high bit clear, the byte is a complete one-byte compact-u16.
     let signatures = reader.read_signatures(discriminator.into())?;
     let message = read_message(&mut reader)?;
+    if matches!(message, VersionedMessage::V1(_)) {
+        return Err(DecodeError::UnexpectedVersion);
+    }
     reader.finish()?;
     Ok(VersionedTransaction {
         signatures,

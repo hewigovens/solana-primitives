@@ -1,6 +1,6 @@
 use crate::{
-    AddressLookupTableAccount, Instruction, Message, MessageV0, Pubkey, Result, Transaction,
-    VersionedTransaction,
+    AddressLookupTableAccount, Instruction, Message, MessageV0, MessageV1, Pubkey, Result,
+    Transaction, TransactionConfig, VersionedMessage, VersionedTransaction,
 };
 
 /// Collects instructions and compiles them into a transaction.
@@ -8,7 +8,8 @@ use crate::{
 /// Accounts are merged and ordered the same way for every version: the fee
 /// payer first, then writable signers, readonly signers, writable non-signers,
 /// and readonly non-signers, each group sorted by key bytes (as the Solana SDK
-/// does). Built transactions carry placeholder signatures until signed.
+/// does). Built messages are sanitized, and transactions carry placeholder
+/// signatures until signed.
 #[derive(Debug, Clone)]
 pub struct TransactionBuilder {
     fee_payer: Pubkey,
@@ -43,8 +44,10 @@ impl TransactionBuilder {
 
     /// Build a legacy transaction.
     pub fn build(&self) -> Result<Transaction> {
-        Message::try_compile(&self.fee_payer, &self.instructions, self.recent_blockhash)
-            .map(Transaction::new)
+        let message =
+            Message::try_compile(&self.fee_payer, &self.instructions, self.recent_blockhash)?;
+        message.sanitize()?;
+        Ok(Transaction::new(message))
     }
 
     /// Build a v0 transaction, loading eligible accounts from `address_lookup_tables`.
@@ -54,13 +57,33 @@ impl TransactionBuilder {
         &self,
         address_lookup_tables: &[AddressLookupTableAccount],
     ) -> Result<VersionedTransaction> {
-        MessageV0::try_compile(
+        let message = MessageV0::try_compile(
             &self.fee_payer,
             &self.instructions,
             address_lookup_tables,
             self.recent_blockhash,
-        )
-        .map(|message| VersionedTransaction::new(message.into()))
+        )?;
+        Self::finish(message.into())
+    }
+
+    /// Build a v1 transaction with `config`.
+    ///
+    /// All accounts are inline. Compute Budget instructions are not translated
+    /// into `config` (the runtime ignores them for v1), so set the compute unit
+    /// limit and fee there; unset values mean zero, not the legacy defaults.
+    pub fn build_v1(&self, config: TransactionConfig) -> Result<VersionedTransaction> {
+        let message = MessageV1::try_compile(
+            &self.fee_payer,
+            &self.instructions,
+            self.recent_blockhash,
+            config,
+        )?;
+        Self::finish(message.into())
+    }
+
+    fn finish(message: VersionedMessage) -> Result<VersionedTransaction> {
+        message.sanitize()?;
+        Ok(VersionedTransaction::new(message))
     }
 
     /// One-shot helper for compiling a V0 transaction.
@@ -85,9 +108,9 @@ mod tests {
     use crate::test_utils::{base64, blockhash, scenarios, signer, vectors};
     use crate::types::{
         AccountMeta, AddressLookupTableAccount, Instruction, MessageV0, SignatureBytes,
-        VersionedMessage, VersionedTransaction,
+        TransactionConfig, VersionedMessage, VersionedTransaction,
     };
-    use crate::{CompileError, Pubkey, SolanaError};
+    use crate::{CompileError, Pubkey, SanitizeError, SolanaError};
     use hexlit::hex;
 
     fn builder(instructions: Vec<Instruction>) -> TransactionBuilder {
@@ -151,6 +174,99 @@ mod tests {
                 .unwrap(),
             &["payer"],
             &vectors::V0_NONCE_TX,
+        );
+    }
+
+    #[test]
+    fn v1_matches_upstream() {
+        let check = |instructions, config, signers: &[&str], expected: &[u8]| {
+            let tx = builder(instructions).build_v1(config).unwrap();
+            assert_eq!(tx.message.transaction_config(), Some(&config));
+            assert_matches_upstream(tx, signers, expected);
+        };
+        check(
+            scenarios::simple(),
+            TransactionConfig::new(),
+            &["payer"],
+            &vectors::V1_SIMPLE_TX,
+        );
+        check(
+            scenarios::complex_without_compute_budget(),
+            scenarios::full_config(),
+            &["payer", "new_account", "cosigner"],
+            &vectors::V1_COMPLEX_TX,
+        );
+        check(
+            scenarios::nonce(),
+            scenarios::partial_config(),
+            &["payer"],
+            &vectors::V1_NONCE_TX,
+        );
+        check(
+            scenarios::simple(),
+            TransactionConfig::new().with_priority_fee(u64::MAX),
+            &["payer"],
+            &vectors::V1_FEE_ONLY_TX,
+        );
+    }
+
+    #[test]
+    fn v1_uses_the_same_key_order_as_legacy() {
+        let legacy = builder(scenarios::complex_without_compute_budget())
+            .build()
+            .unwrap();
+        let v1 = builder(scenarios::complex_without_compute_budget())
+            .build_v1(scenarios::full_config())
+            .unwrap();
+        assert_eq!(v1.header(), &legacy.message.header);
+        assert_eq!(v1.account_keys(), &legacy.message.account_keys[..]);
+        assert_eq!(v1.instructions(), &legacy.message.instructions[..]);
+    }
+
+    #[test]
+    fn v1_build_is_sanitized() {
+        let payer = signer("payer").pubkey;
+        let instructions: Vec<Instruction> = (0..64u8)
+            .map(|i| transfer(&payer, &Pubkey::new([i; 32]), 1))
+            .collect();
+        // 64 recipients + payer + System program exceed the 64-address limit.
+        assert_eq!(
+            builder(instructions.clone())
+                .build_v1(TransactionConfig::new())
+                .map(|_| ()),
+            Err(SanitizeError::TooManyAccountKeys.into())
+        );
+        assert!(
+            builder(instructions[..62].to_vec())
+                .build_v1(TransactionConfig::new())
+                .is_ok()
+        );
+        assert_eq!(
+            builder(scenarios::simple())
+                .build_v1(TransactionConfig::new().with_heap_size(1000))
+                .map(|_| ()),
+            Err(SanitizeError::InvalidHeapSize.into())
+        );
+        // Programs cannot be the fee payer in any version.
+        let pay_to_program = [Instruction {
+            program_id: payer,
+            accounts: vec![],
+            data: vec![],
+        }];
+        let invalid_program = Err(SanitizeError::InvalidProgramIndex.into());
+        assert_eq!(
+            builder(pay_to_program.to_vec()).build().map(|_| ()),
+            invalid_program
+        );
+        assert_eq!(
+            builder(pay_to_program.to_vec()).build_v0(&[]).map(|_| ()),
+            invalid_program
+        );
+        assert_eq!(
+            builder(pay_to_program.to_vec())
+                .build_v1(TransactionConfig::new())
+                .map(|_| ()),
+            invalid_program
         );
     }
 

@@ -1,5 +1,6 @@
 use crate::compiler::{CompiledKeys, compile_instructions};
 use crate::error::{Result, SanitizeError};
+use crate::types::v1::{MessageV1, TransactionConfig};
 use crate::types::{
     AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
 };
@@ -38,7 +39,10 @@ pub struct MessageHeader {
 
 impl MessageHeader {
     /// Rules shared by every message version.
-    fn sanitize(&self, num_account_keys: usize) -> std::result::Result<(), SanitizeError> {
+    pub(crate) fn sanitize(
+        &self,
+        num_account_keys: usize,
+    ) -> std::result::Result<(), SanitizeError> {
         if usize::from(self.num_required_signatures)
             + usize::from(self.num_readonly_unsigned_accounts)
             > num_account_keys
@@ -54,7 +58,7 @@ impl MessageHeader {
 
 /// Check instruction indexes: programs must be static non-payer keys, and
 /// accounts must be below `num_account_keys`.
-fn sanitize_instructions(
+pub(crate) fn sanitize_instructions(
     instructions: &[CompiledInstruction],
     num_static_keys: usize,
     num_account_keys: usize,
@@ -270,6 +274,8 @@ pub enum VersionedMessage {
     Legacy(Message),
     /// Version 0 message.
     V0(MessageV0),
+    /// Version 1 message.
+    V1(MessageV1),
 }
 
 impl Default for VersionedMessage {
@@ -290,12 +296,19 @@ impl From<MessageV0> for VersionedMessage {
     }
 }
 
+impl From<MessageV1> for VersionedMessage {
+    fn from(message: MessageV1) -> Self {
+        Self::V1(message)
+    }
+}
+
 impl VersionedMessage {
     /// The message header.
     pub fn header(&self) -> &MessageHeader {
         match self {
             Self::Legacy(message) => &message.header,
             Self::V0(message) => &message.header,
+            Self::V1(message) => &message.header,
         }
     }
 
@@ -304,14 +317,17 @@ impl VersionedMessage {
         match self {
             Self::Legacy(message) => &message.account_keys,
             Self::V0(message) => &message.account_keys,
+            Self::V1(message) => &message.account_keys,
         }
     }
 
-    /// The recent blockhash (or durable nonce) that bounds the message lifetime.
+    /// The recent blockhash (or durable nonce) that bounds the message lifetime;
+    /// the lifetime specifier of a v1 message.
     pub fn recent_blockhash(&self) -> &[u8; 32] {
         match self {
             Self::Legacy(message) => &message.recent_blockhash,
             Self::V0(message) => &message.recent_blockhash,
+            Self::V1(message) => &message.lifetime_specifier,
         }
     }
 
@@ -320,6 +336,7 @@ impl VersionedMessage {
         match self {
             Self::Legacy(message) => message.recent_blockhash = recent_blockhash,
             Self::V0(message) => message.recent_blockhash = recent_blockhash,
+            Self::V1(message) => message.lifetime_specifier = recent_blockhash,
         }
     }
 
@@ -328,14 +345,31 @@ impl VersionedMessage {
         match self {
             Self::Legacy(message) => &message.instructions,
             Self::V0(message) => &message.instructions,
+            Self::V1(message) => &message.instructions,
+        }
+    }
+
+    pub(crate) fn instructions_mut(&mut self) -> &mut [CompiledInstruction] {
+        match self {
+            Self::Legacy(message) => &mut message.instructions,
+            Self::V0(message) => &mut message.instructions,
+            Self::V1(message) => &mut message.instructions,
+        }
+    }
+
+    /// The v1 transaction config; `None` for earlier versions.
+    pub fn transaction_config(&self) -> Option<&TransactionConfig> {
+        match self {
+            Self::V1(message) => Some(&message.config),
+            _ => None,
         }
     }
 
     /// Address table lookups; `None` for versions without lookup tables.
     pub fn address_table_lookups(&self) -> Option<&[MessageAddressTableLookup]> {
         match self {
-            Self::Legacy(_) => None,
             Self::V0(message) => Some(&message.address_table_lookups),
+            Self::Legacy(_) | Self::V1(_) => None,
         }
     }
 
@@ -368,6 +402,7 @@ impl VersionedMessage {
         match self {
             Self::Legacy(message) => message.sanitize(),
             Self::V0(message) => message.sanitize(),
+            Self::V1(message) => message.sanitize(),
         }
     }
 }

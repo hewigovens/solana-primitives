@@ -157,6 +157,8 @@ impl std::error::Error for DecodeError {}
 pub enum EncodeError {
     /// A length does not fit its wire field.
     LengthOverflow { len: usize, max: usize },
+    /// A v1 transaction must carry exactly `num_required_signatures` signatures.
+    SignatureCountMismatch { expected: usize, actual: usize },
 }
 
 impl fmt::Display for EncodeError {
@@ -164,6 +166,9 @@ impl fmt::Display for EncodeError {
         match self {
             Self::LengthOverflow { len, max } => {
                 write!(f, "length {len} exceeds wire maximum {max}")
+            }
+            Self::SignatureCountMismatch { expected, actual } => {
+                write!(f, "expected {expected} signatures, got {actual}")
             }
         }
     }

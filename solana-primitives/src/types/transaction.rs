@@ -5,7 +5,7 @@ use crate::instructions::program_ids::{compute_budget_program, system_program};
 use crate::instructions::system::is_advance_nonce_instruction_data;
 use crate::types::{
     CompiledInstruction, MAX_TRANSACTION_SIZE, Message, MessageAddressTableLookup, MessageHeader,
-    Pubkey, SignatureBytes, VersionedMessage,
+    Pubkey, SignatureBytes, VersionedMessage, v1,
 };
 use crate::wire;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -18,6 +18,8 @@ pub enum TransactionVersion {
     Legacy,
     /// Version 0 (address lookup tables).
     V0,
+    /// Version 1 (SIMD-0385: larger transactions, inline compute budget config).
+    V1,
 }
 
 /// A legacy transaction.
@@ -186,6 +188,7 @@ impl VersionedTransaction {
         match self.message {
             VersionedMessage::Legacy(_) => TransactionVersion::Legacy,
             VersionedMessage::V0(_) => TransactionVersion::V0,
+            VersionedMessage::V1(_) => TransactionVersion::V1,
         }
     }
 
@@ -263,13 +266,14 @@ impl VersionedTransaction {
         Ok(wire::encode_transaction(self)?)
     }
 
-    /// Decode exactly one transaction and check sanitization rules.
+    /// Decode exactly one transaction and check it the way the network would.
     ///
-    /// Truncated input, trailing bytes, non-canonical lengths, unknown
-    /// versions, and transactions that fail [`VersionedTransaction::sanitize`]
-    /// are rejected.
+    /// Truncated input, trailing bytes, non-canonical lengths, unknown versions
+    /// or config bits, transactions over their version's size limit, and
+    /// transactions that fail [`VersionedTransaction::sanitize`] are rejected.
     pub fn deserialize(bytes: &[u8]) -> Result<Self> {
         let transaction = wire::decode_transaction(bytes)?;
+        check_size(bytes.len(), transaction.max_size())?;
         transaction.sanitize()?;
         Ok(transaction)
     }
@@ -286,9 +290,13 @@ impl VersionedTransaction {
         sanitize_signature_count(self.header(), self.signatures.len())
     }
 
-    /// The maximum wire size for this transaction's version.
+    /// The maximum wire size for this transaction's version: 1232 bytes for
+    /// legacy and v0, 4096 for v1.
     pub fn max_size(&self) -> usize {
-        MAX_TRANSACTION_SIZE
+        match self.version() {
+            TransactionVersion::Legacy | TransactionVersion::V0 => MAX_TRANSACTION_SIZE,
+            TransactionVersion::V1 => v1::MAX_TRANSACTION_SIZE,
+        }
     }
 
     /// Check that the wire size is within [`VersionedTransaction::max_size`].
@@ -346,11 +354,16 @@ impl VersionedTransaction {
     }
 
     /// Compute Budget instructions with their positions in the instruction list.
+    /// Always empty for v1, whose runtime ignores them.
     fn compute_budget_instructions(
         &self,
     ) -> impl Iterator<Item = (usize, ComputeBudgetInstruction)> + '_ {
         let program_id = compute_budget_program();
-        self.instructions()
+        let instructions = match self.message {
+            VersionedMessage::V1(_) => &[],
+            _ => self.instructions(),
+        };
+        instructions
             .iter()
             .enumerate()
             .filter(move |(_, instruction)| self.program_id(instruction) == Some(program_id))
@@ -380,16 +393,22 @@ impl VersionedTransaction {
         else {
             return false;
         };
-        let instructions = match &mut self.message {
-            VersionedMessage::Legacy(message) => &mut message.instructions,
-            VersionedMessage::V0(message) => &mut message.instructions,
-        };
-        instructions[index].data[1..=value.len()].copy_from_slice(value);
+        self.message.instructions_mut()[index].data[1..=value.len()].copy_from_slice(value);
         true
     }
 
-    /// The compute unit price in micro-lamports per compute unit, from the first
-    /// `SetComputeUnitPrice` instruction.
+    fn v1_config_mut(&mut self) -> Option<&mut v1::TransactionConfig> {
+        match &mut self.message {
+            VersionedMessage::V1(message) => Some(&mut message.config),
+            _ => None,
+        }
+    }
+
+    /// The legacy/v0 compute unit price in micro-lamports per compute unit, from the
+    /// first `SetComputeUnitPrice` instruction.
+    ///
+    /// Always `None` for v1, which pays a total fee instead; see
+    /// [`VersionedTransaction::priority_fee_lamports`].
     pub fn get_compute_unit_price(&self) -> Option<u64> {
         self.find_compute_budget(|instruction| match instruction {
             ComputeBudgetInstruction::SetComputeUnitPrice(micro_lamports) => Some(micro_lamports),
@@ -399,7 +418,13 @@ impl VersionedTransaction {
 
     /// Overwrite the first `SetComputeUnitPrice` value; returns `false` if there is none.
     /// Existing signatures become invalid.
+    ///
+    /// Fails with [`SolanaError::UnsupportedVersion`] for v1; use
+    /// [`VersionedTransaction::set_priority_fee_lamports`].
     pub fn set_compute_unit_price(&mut self, micro_lamports: u64) -> Result<bool> {
+        if self.version() == TransactionVersion::V1 {
+            return Err(SolanaError::UnsupportedVersion);
+        }
         Ok(self.replace_compute_budget_value(
             |instruction| {
                 matches!(
@@ -411,17 +436,43 @@ impl VersionedTransaction {
         ))
     }
 
-    /// The compute unit limit from the first `SetComputeUnitLimit` instruction.
+    /// The v1 total priority fee in lamports; `None` if unset or not v1.
+    pub fn priority_fee_lamports(&self) -> Option<u64> {
+        self.message.transaction_config()?.priority_fee
+    }
+
+    /// Set the v1 total priority fee in lamports. Existing signatures become invalid.
+    ///
+    /// Fails with [`SolanaError::UnsupportedVersion`] for legacy and v0; use
+    /// [`VersionedTransaction::set_compute_unit_price`].
+    pub fn set_priority_fee_lamports(&mut self, lamports: u64) -> Result<()> {
+        let config = self
+            .v1_config_mut()
+            .ok_or(SolanaError::UnsupportedVersion)?;
+        config.priority_fee = Some(lamports);
+        Ok(())
+    }
+
+    /// The requested compute unit limit: the v1 config value, or the first
+    /// `SetComputeUnitLimit` instruction for legacy and v0.
     pub fn get_compute_unit_limit(&self) -> Option<u32> {
+        if let Some(config) = self.message.transaction_config() {
+            return config.compute_unit_limit;
+        }
         self.find_compute_budget(|instruction| match instruction {
             ComputeBudgetInstruction::SetComputeUnitLimit(units) => Some(units),
             _ => None,
         })
     }
 
-    /// Overwrite the first `SetComputeUnitLimit` value; returns `false` if there is none.
+    /// Set the compute unit limit; returns `false` if a legacy/v0 transaction has no
+    /// `SetComputeUnitLimit` instruction to overwrite. v1 always sets its config.
     /// Existing signatures become invalid.
     pub fn set_compute_unit_limit(&mut self, units: u32) -> Result<bool> {
+        if let Some(config) = self.v1_config_mut() {
+            config.compute_unit_limit = Some(units);
+            return Ok(true);
+        }
         Ok(self.replace_compute_budget_value(
             |instruction| {
                 matches!(
@@ -433,17 +484,24 @@ impl VersionedTransaction {
         ))
     }
 
-    /// The loaded accounts data size limit from the first
-    /// `SetLoadedAccountsDataSizeLimit` instruction.
+    /// The requested loaded accounts data size limit: the v1 config value, or the
+    /// first `SetLoadedAccountsDataSizeLimit` instruction for legacy and v0.
     pub fn get_loaded_accounts_data_size_limit(&self) -> Option<u32> {
+        if let Some(config) = self.message.transaction_config() {
+            return config.loaded_accounts_data_size_limit;
+        }
         self.find_compute_budget(|instruction| match instruction {
             ComputeBudgetInstruction::SetLoadedAccountsDataSizeLimit(bytes) => Some(bytes),
             _ => None,
         })
     }
 
-    /// The requested heap size from the first `RequestHeapFrame` instruction.
+    /// The requested heap size: the v1 config value, or the first
+    /// `RequestHeapFrame` instruction for legacy and v0.
     pub fn get_heap_size(&self) -> Option<u32> {
+        if let Some(config) = self.message.transaction_config() {
+            return config.heap_size;
+        }
         self.find_compute_budget(|instruction| match instruction {
             ComputeBudgetInstruction::RequestHeapFrame(bytes) => Some(bytes),
             _ => None,
@@ -525,8 +583,9 @@ mod tests {
     use crate::TransactionBuilder;
     use crate::crypto::hash_data;
     use crate::instructions::{compute_budget, system};
-    use crate::test_utils::{LEGACY_TX, MAYAN_V0_TX, base64, key};
-    use crate::types::MessageV0;
+    use crate::test_utils::{LEGACY_TX, MAYAN_V0_TX, base64, key, scenarios, vectors};
+    use crate::types::Instruction;
+    use crate::types::{MessageV0, TransactionConfig};
 
     fn decode(fixture: &str) -> VersionedTransaction {
         VersionedTransaction::deserialize(&base64(fixture)).unwrap()
@@ -726,6 +785,151 @@ mod tests {
     }
 
     #[test]
+    fn v1_transactions() {
+        let tx = VersionedTransaction::deserialize(&vectors::V1_COMPLEX_TX).unwrap();
+        assert_eq!(tx.version(), TransactionVersion::V1);
+        assert_eq!(tx.max_size(), 4096);
+        assert_eq!(tx.signatures.len(), 3);
+        assert_eq!(tx.address_table_lookups(), None);
+        assert_eq!(
+            tx.message.transaction_config(),
+            Some(&scenarios::full_config())
+        );
+        assert_eq!(tx.verify(), Ok(()));
+
+        // Config values, never Compute Budget instructions.
+        assert_eq!(tx.priority_fee_lamports(), Some(12_345));
+        assert_eq!(tx.get_compute_unit_limit(), Some(300_000));
+        assert_eq!(tx.get_loaded_accounts_data_size_limit(), Some(65_536));
+        assert_eq!(tx.get_heap_size(), Some(65_536));
+        assert_eq!(tx.get_compute_unit_price(), None);
+
+        let mut tx = tx;
+        assert_eq!(
+            tx.set_compute_unit_price(1),
+            Err(SolanaError::UnsupportedVersion)
+        );
+        assert_eq!(tx.set_compute_unit_limit(7), Ok(true));
+        assert_eq!(tx.set_priority_fee_lamports(9), Ok(()));
+        assert_eq!(
+            tx.message.transaction_config(),
+            Some(
+                &scenarios::full_config()
+                    .with_compute_unit_limit(7)
+                    .with_priority_fee(9)
+            )
+        );
+        assert_eq!(tx.verify(), Err(SolanaError::InvalidSignature));
+
+        let partial = VersionedTransaction::deserialize(&vectors::V1_NONCE_TX).unwrap();
+        assert!(partial.uses_durable_nonce());
+        assert_eq!(partial.priority_fee_lamports(), None);
+        assert_eq!(partial.get_loaded_accounts_data_size_limit(), None);
+        assert_eq!(partial.get_heap_size(), Some(32 * 1024));
+
+        let mut legacy = decode(LEGACY_TX);
+        assert_eq!(legacy.priority_fee_lamports(), None);
+        assert_eq!(
+            legacy.set_priority_fee_lamports(1),
+            Err(SolanaError::UnsupportedVersion)
+        );
+    }
+
+    #[test]
+    fn v1_ignores_compute_budget_instructions() {
+        let mut builder = TransactionBuilder::new(key("payer"), [0; 32]);
+        builder.add_instructions(scenarios::complex());
+        let mut tx = builder.build_v1(TransactionConfig::new()).unwrap();
+        assert_eq!(tx.get_compute_unit_limit(), None);
+        assert_eq!(tx.get_compute_unit_price(), None);
+        assert_eq!(tx.set_compute_unit_limit(1), Ok(true));
+        assert_eq!(
+            tx.instructions()[0].data,
+            compute_budget::set_compute_unit_limit(200_000).data
+        );
+    }
+
+    #[test]
+    fn v1_wire_errors() {
+        for tx in [
+            &vectors::V1_SIMPLE_TX[..],
+            &vectors::V1_COMPLEX_TX,
+            &vectors::V1_NONCE_TX,
+            &vectors::V1_FEE_ONLY_TX,
+        ] {
+            for len in 0..tx.len() {
+                assert!(
+                    VersionedTransaction::deserialize(&tx[..len]).is_err(),
+                    "truncated to {len} bytes"
+                );
+            }
+            assert_eq!(
+                VersionedTransaction::deserialize(&[tx, &[0]].concat()),
+                Err(DecodeError::TrailingBytes.into())
+            );
+        }
+
+        let mut tx = VersionedTransaction::deserialize(&vectors::V1_SIMPLE_TX).unwrap();
+        tx.signatures.push(SignatureBytes::default());
+        assert_eq!(
+            tx.serialize(),
+            Err(crate::EncodeError::SignatureCountMismatch {
+                expected: 1,
+                actual: 2
+            }
+            .into())
+        );
+
+        // Half of the priority-fee bit pair.
+        let mut bytes = vectors::V1_SIMPLE_TX;
+        bytes[4] = 0b01;
+        assert_eq!(
+            VersionedTransaction::deserialize(&bytes),
+            Err(DecodeError::InvalidConfigMask(1).into())
+        );
+    }
+
+    #[test]
+    fn deserialize_enforces_version_size_limits() {
+        let payer = key("payer");
+        let big_instruction = |len| Instruction {
+            program_id: key("program"),
+            accounts: vec![],
+            data: vec![0; len],
+        };
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instruction(big_instruction(1200));
+        let legacy = VersionedTransaction::from(builder.build().unwrap());
+        let bytes = legacy.serialize().unwrap();
+        assert!(bytes.len() > MAX_TRANSACTION_SIZE);
+        assert_eq!(
+            VersionedTransaction::deserialize(&bytes),
+            Err(SolanaError::TransactionTooLarge {
+                size: bytes.len(),
+                max: MAX_TRANSACTION_SIZE
+            })
+        );
+
+        // The same message fits in v1, up to 4096 bytes.
+        let v1 = builder.build_v1(TransactionConfig::new()).unwrap();
+        assert_eq!(v1.validate_size(), Ok(()));
+        let bytes = v1.serialize().unwrap();
+        assert_eq!(VersionedTransaction::deserialize(&bytes), Ok(v1));
+
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instruction(big_instruction(4000));
+        let v1 = builder.build_v1(TransactionConfig::new()).unwrap();
+        let bytes = v1.serialize().unwrap();
+        assert_eq!(
+            VersionedTransaction::deserialize(&bytes),
+            Err(SolanaError::TransactionTooLarge {
+                size: bytes.len(),
+                max: 4096
+            })
+        );
+    }
+
+    #[test]
     fn deserialize_accepts_minimal_transactions() {
         let mut legacy = legacy_tx_prefix(1, [1, 0, 1], 2);
         legacy.extend_from_slice(&[1, 1, 1, 0, 0]);
@@ -775,8 +979,8 @@ mod tests {
     fn deserialize_rejects_unknown_discriminators() {
         let mut message = legacy_tx_prefix(0, [1, 0, 1], 2);
         message.extend_from_slice(&[1, 1, 1, 0, 0, 0]);
-        // A bare message, including the off-chain message prefix.
-        for first in [0x80, 0x81, 0xff] {
+        // A bare v0 message, an unknown version, and the off-chain message prefix.
+        for first in [0x80, 0x82, 0xff] {
             message[0] = first;
             assert_eq!(
                 VersionedTransaction::deserialize(&message),
@@ -784,12 +988,20 @@ mod tests {
             );
         }
 
-        let mut v1_in_legacy_envelope = legacy_tx_prefix(1, [1, 0, 1], 2);
-        v1_in_legacy_envelope.insert(65, 0x81);
-        v1_in_legacy_envelope.extend_from_slice(&[1, 1, 1, 0, 0]);
+        let mut unknown_version = legacy_tx_prefix(1, [1, 0, 1], 2);
+        unknown_version.insert(65, 0x82);
+        unknown_version.extend_from_slice(&[1, 1, 1, 0, 0]);
+        assert_eq!(
+            VersionedTransaction::deserialize(&unknown_version),
+            Err(DecodeError::UnsupportedMessageVersion(2).into())
+        );
+
+        // A v1 message is only valid in the v1 envelope.
+        let (message, signature) = vectors::V1_SIMPLE_TX.split_at(vectors::V1_SIMPLE_TX.len() - 64);
+        let v1_in_legacy_envelope = [&[1], signature, message].concat();
         assert_eq!(
             VersionedTransaction::deserialize(&v1_in_legacy_envelope),
-            Err(DecodeError::UnsupportedMessageVersion(1).into())
+            Err(DecodeError::UnexpectedVersion.into())
         );
     }
 

@@ -59,6 +59,10 @@ fn print_transaction(tx: &VersionedTransaction) {
         }
     }
 
+    // v1 carries a total fee in its config; legacy/v0 price compute units.
+    if let Some(fee) = tx.priority_fee_lamports() {
+        println!("\nPriority fee: {fee} lamports");
+    }
     if let Some(price) = tx.get_compute_unit_price() {
         println!("\nCompute unit price: {price} micro-lamports");
     }
