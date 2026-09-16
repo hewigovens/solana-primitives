@@ -1,5 +1,8 @@
+use crate::compiler::{CompiledKeys, compile_instructions};
 use crate::error::{Result, SanitizeError};
-use crate::types::{CompiledInstruction, MessageAddressTableLookup, Pubkey};
+use crate::types::{
+    AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
+};
 use crate::wire;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -109,6 +112,25 @@ impl Message {
         }
     }
 
+    /// Compile `instructions` with `payer` as the fee payer.
+    ///
+    /// Keys are ordered like the Solana SDK's `Message::new`.
+    pub fn try_compile(
+        payer: &Pubkey,
+        instructions: &[Instruction],
+        recent_blockhash: [u8; 32],
+    ) -> Result<Self> {
+        let (header, account_keys) =
+            CompiledKeys::compile(payer, instructions).into_message_components()?;
+        let instructions = compile_instructions(instructions, &account_keys, &[])?;
+        Ok(Self {
+            header,
+            account_keys,
+            recent_blockhash,
+            instructions,
+        })
+    }
+
     /// Get the number of required signatures
     pub fn num_required_signatures(&self) -> u8 {
         self.header.num_required_signatures
@@ -173,6 +195,38 @@ pub struct MessageV0 {
 pub type VersionedMessageV0 = MessageV0;
 
 impl MessageV0 {
+    /// Compile `instructions` with `payer` as the fee payer, loading eligible
+    /// accounts from `address_lookup_tables`.
+    ///
+    /// Tables are tried in order and each account is loaded from the first table
+    /// (and first index) that has it. Signers, invoked programs, and the durable
+    /// nonce account always stay static. Matches the Solana SDK's `v0::Message::try_compile`.
+    pub fn try_compile(
+        payer: &Pubkey,
+        instructions: &[Instruction],
+        address_lookup_tables: &[AddressLookupTableAccount],
+        recent_blockhash: [u8; 32],
+    ) -> Result<Self> {
+        let mut keys = CompiledKeys::compile(payer, instructions);
+        let mut address_table_lookups = Vec::new();
+        let mut loaded = Vec::new();
+        for table in address_lookup_tables {
+            if let Some((lookup, addresses)) = keys.extract_table_lookup(table)? {
+                address_table_lookups.push(lookup);
+                loaded.push(addresses);
+            }
+        }
+        let (header, account_keys) = keys.into_message_components()?;
+        let instructions = compile_instructions(instructions, &account_keys, &loaded)?;
+        Ok(Self {
+            header,
+            account_keys,
+            recent_blockhash,
+            instructions,
+            address_table_lookups,
+        })
+    }
+
     /// Serialize to wire bytes, including the `0x80` version prefix. These are the bytes that get signed.
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();

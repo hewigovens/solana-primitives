@@ -3,13 +3,35 @@
 //! Keys are derived as `sha256(label)` so the same labels can be reproduced
 //! in upstream Solana SDK code when generating golden vectors.
 
-use crate::crypto::hash_data;
+pub mod scenarios;
+pub mod vectors;
+
+use crate::crypto::{get_public_key, hash_data};
 use crate::types::{AccountMeta, Pubkey};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 /// Deterministic pubkey for `label`.
 pub fn key(label: &str) -> Pubkey {
     Pubkey::new(hash_data(label.as_bytes()))
+}
+
+/// A deterministic Ed25519 signer: the private key is `sha256(label)`.
+pub struct TestSigner {
+    pub private_key: [u8; 32],
+    pub pubkey: Pubkey,
+}
+
+pub fn signer(label: &str) -> TestSigner {
+    let private_key = hash_data(label.as_bytes());
+    TestSigner {
+        private_key,
+        pubkey: Pubkey::new(get_public_key(&private_key).unwrap()),
+    }
+}
+
+/// The recent blockhash used by the golden transactions.
+pub fn blockhash() -> [u8; 32] {
+    hash_data(b"blockhash")
 }
 
 /// Parse a base58 pubkey literal.

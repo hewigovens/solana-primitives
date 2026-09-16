@@ -1,4 +1,5 @@
 pub mod builder;
+mod compiler;
 pub mod crypto;
 pub mod error;
 pub mod instructions;
