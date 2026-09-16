@@ -77,16 +77,11 @@ impl AddressLookupTableAccount {
             return Err(SolanaError::InvalidMessage);
         }
 
-        let address_data = &data[LOOKUP_TABLE_META_SIZE..];
-        if !address_data.len().is_multiple_of(32) {
+        let (chunks, remainder) = data[LOOKUP_TABLE_META_SIZE..].as_chunks::<32>();
+        if !remainder.is_empty() {
             return Err(SolanaError::InvalidMessage);
         }
-
-        let mut addresses = Vec::with_capacity(address_data.len() / 32);
-        for chunk in address_data.chunks_exact(32) {
-            let bytes: [u8; 32] = chunk.try_into().map_err(|_| SolanaError::InvalidMessage)?;
-            addresses.push(Pubkey::new(bytes));
-        }
+        let addresses = chunks.iter().copied().map(Pubkey::new).collect();
 
         Ok(Self { key, addresses })
     }

@@ -6,6 +6,9 @@ pub mod instructions;
 pub mod short_vec;
 pub mod types;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use borsh_helpers::{bytes_to_compact_array, compact_array_to_bytes};
 pub use builder::{InstructionBuilder, InstructionDataBuilder, TransactionBuilder};
 pub use crypto::*;

@@ -1,175 +1,171 @@
-use crate::instructions::program_ids::SYSTEM_PROGRAM_ID;
+use crate::instructions::program_ids::{recent_blockhashes_sysvar, rent_sysvar, system_program};
 use crate::types::{AccountMeta, Instruction, Pubkey};
-use borsh::{BorshDeserialize, BorshSerialize};
 
-/// System program instruction types
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+/// Serialized size of a nonce account (`nonce::state::Versions`).
+pub const NONCE_STATE_SIZE: u64 = 80;
+
+/// System program instructions.
+///
+/// [`SystemInstruction::serialize`] produces the program's bincode encoding:
+/// a `u32` LE variant index, fixed-width LE integers, raw 32-byte pubkeys, and
+/// strings as a `u64` LE byte length followed by the UTF-8 bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemInstruction {
-    /// Create a new account
+    /// Create a new account.
+    ///
     /// 0. `[WRITE, SIGNER]` Funding account
     /// 1. `[WRITE, SIGNER]` New account
     CreateAccount {
-        /// Number of lamports to transfer to the new account
         lamports: u64,
-        /// Number of bytes of memory to allocate
         space: u64,
-        /// Address of program that will own the new account
         owner: Pubkey,
     },
-
-    /// Assign account to a program
+    /// Assign account to a program.
+    ///
     /// 0. `[WRITE, SIGNER]` Assigned account
-    Assign {
-        /// Owner program account
-        owner: Pubkey,
-    },
-
-    /// Transfer lamports
-    /// 0. `[WRITE, SIGNER]` Source account
-    /// 1. `[WRITE]` Destination account
-    Transfer {
-        /// Amount of lamports to transfer
-        lamports: u64,
-    },
-
-    /// Create a new account at an address derived from a base pubkey and a seed
+    Assign { owner: Pubkey },
+    /// Transfer lamports.
+    ///
+    /// 0. `[WRITE, SIGNER]` Funding account
+    /// 1. `[WRITE]` Recipient account
+    Transfer { lamports: u64 },
+    /// Create a new account at an address derived from a base pubkey and a seed.
+    ///
     /// 0. `[WRITE, SIGNER]` Funding account
     /// 1. `[WRITE]` Created account
-    /// 2. `[]` Base account
+    /// 2. `[SIGNER]` (optional) Base account, omitted when it is the funding account
     CreateAccountWithSeed {
-        /// Base public key
         base: Pubkey,
-        /// String of ASCII chars, no longer than 32 bytes
         seed: String,
-        /// Number of lamports to transfer to the new account
         lamports: u64,
-        /// Number of bytes of memory to allocate
         space: u64,
-        /// Address of program that will own the new account
         owner: Pubkey,
     },
-
-    /// Advance the nonce in a nonce account
-    /// 0. `[WRITE, SIGNER]` Nonce account
-    /// 1. `[]` Recent blockhashes sysvar
+    /// Consume a stored nonce, replacing it with a successor.
+    ///
+    /// 0. `[WRITE]` Nonce account
+    /// 1. `[]` RecentBlockhashes sysvar
     /// 2. `[SIGNER]` Nonce authority
-    AdvanceNonceAccount {
-        /// Nonce authority
-        authorized: Pubkey,
-    },
-
-    /// Withdraw funds from a nonce account
+    AdvanceNonceAccount,
+    /// Withdraw lamports from a nonce account.
+    ///
     /// 0. `[WRITE]` Nonce account
     /// 1. `[WRITE]` Recipient account
-    /// 2. `[SIGNER]` Nonce authority
-    /// 3. `[]` Recent blockhashes sysvar
-    WithdrawNonceAccount {
-        /// Amount of lamports to withdraw
-        lamports: u64,
-    },
-
-    /// Drive state of Nonce account
+    /// 2. `[]` RecentBlockhashes sysvar
+    /// 3. `[]` Rent sysvar
+    /// 4. `[SIGNER]` Nonce authority
+    WithdrawNonceAccount(u64),
+    /// Initialize a nonce account with the given authority.
+    ///
+    /// 0. `[WRITE]` Nonce account
+    /// 1. `[]` RecentBlockhashes sysvar
+    /// 2. `[]` Rent sysvar
+    InitializeNonceAccount(Pubkey),
+    /// Change the nonce authority.
+    ///
     /// 0. `[WRITE]` Nonce account
     /// 1. `[SIGNER]` Nonce authority
-    InitializeNonceAccount {
-        /// Nonce authority
-        authorized: Pubkey,
-    },
-
-    /// Change the entity authorized to manage nonce
-    /// 0. `[WRITE]` Nonce account
-    /// 1. `[SIGNER]` Nonce authority
-    AuthorizeNonceAccount {
-        /// New authority
-        authorized: Pubkey,
-    },
-
-    /// Allocate space in an account
-    /// 0. `[WRITE, SIGNER]` Account to allocate
-    Allocate {
-        /// Amount of space to allocate
-        space: u64,
-    },
-
-    /// Allocate space in an account at an address derived from a base account and a seed
+    AuthorizeNonceAccount(Pubkey),
+    /// Allocate space in an account without funding it.
+    ///
+    /// 0. `[WRITE, SIGNER]` New account
+    Allocate { space: u64 },
+    /// Allocate space for and assign an account derived from a base pubkey and a seed.
+    ///
     /// 0. `[WRITE]` Allocated account
     /// 1. `[SIGNER]` Base account
     AllocateWithSeed {
-        /// Base account
         base: Pubkey,
-        /// String of ASCII chars, no longer than 32 bytes
         seed: String,
-        /// Amount of space to allocate
         space: u64,
-        /// Owner program account
         owner: Pubkey,
     },
-
-    /// Assign an account at an address derived from a base account and a seed
+    /// Assign an account derived from a base pubkey and a seed to a program.
+    ///
     /// 0. `[WRITE]` Assigned account
     /// 1. `[SIGNER]` Base account
     AssignWithSeed {
-        /// Base account
         base: Pubkey,
-        /// String of ASCII chars, no longer than 32 bytes
         seed: String,
-        /// Owner program account
         owner: Pubkey,
     },
-
-    /// Transfer lamports from an account at an address derived from a base account and a seed
-    /// 0. `[WRITE]` Source account
-    /// 1. `[WRITE]` Destination account
-    /// 2. `[SIGNER]` Base account
+    /// Transfer lamports from an account derived from a base pubkey and a seed.
+    ///
+    /// 0. `[WRITE]` Funding account
+    /// 1. `[SIGNER]` Base for the funding account
+    /// 2. `[WRITE]` Recipient account
     TransferWithSeed {
-        /// Amount of lamports to transfer
         lamports: u64,
-        /// Seed for the source account
-        seed: String,
-        /// Owner program for the seed account
-        owner: Pubkey,
+        from_seed: String,
+        from_owner: Pubkey,
     },
+    /// One-time idempotent upgrade of a legacy nonce account.
+    ///
+    /// 0. `[WRITE]` Nonce account
+    UpgradeNonceAccount,
 }
 
 impl SystemInstruction {
-    /// The serialized size of the instruction
-    pub fn size(&self) -> usize {
+    fn index(&self) -> u32 {
         match self {
-            Self::CreateAccount { .. } => 52, // 4 + 8 + 8 + 32
-            Self::Assign { .. } => 36,        // 4 + 32
-            Self::Transfer { .. } => 12,      // 4 + 8
-            Self::CreateAccountWithSeed { seed, .. } => 116 + seed.len(), // 4 + 32 + (4 + len) + 8 + 8 + 32
-            Self::AdvanceNonceAccount { .. } => 36,                       // 4 + 32
-            Self::WithdrawNonceAccount { .. } => 12,                      // 4 + 8
-            Self::InitializeNonceAccount { .. } => 36,                    // 4 + 32
-            Self::AuthorizeNonceAccount { .. } => 36,                     // 4 + 32
-            Self::Allocate { .. } => 12,                                  // 4 + 8
-            Self::AllocateWithSeed { seed, .. } => 84 + seed.len(), // 4 + 32 + (4 + len) + 8 + 32
-            Self::AssignWithSeed { seed, .. } => 72 + seed.len(),   // 4 + 32 + (4 + len) + 32
-            Self::TransferWithSeed { seed, .. } => 48 + seed.len(), // 4 + 8 + (4 + len) + 32
+            Self::CreateAccount { .. } => 0,
+            Self::Assign { .. } => 1,
+            Self::Transfer { .. } => 2,
+            Self::CreateAccountWithSeed { .. } => 3,
+            Self::AdvanceNonceAccount => 4,
+            Self::WithdrawNonceAccount(_) => 5,
+            Self::InitializeNonceAccount(_) => 6,
+            Self::AuthorizeNonceAccount(_) => 7,
+            Self::Allocate { .. } => 8,
+            Self::AllocateWithSeed { .. } => 9,
+            Self::AssignWithSeed { .. } => 10,
+            Self::TransferWithSeed { .. } => 11,
+            Self::UpgradeNonceAccount => 12,
         }
     }
 
-    /// Serialize the instruction to a byte vector
+    /// The serialized size of the instruction data in bytes.
+    pub fn size(&self) -> usize {
+        const TAG: usize = 4;
+        const U64: usize = 8;
+        const KEY: usize = 32;
+        let string = |s: &str| U64 + s.len();
+        TAG + match self {
+            Self::CreateAccount { .. } => U64 + U64 + KEY,
+            Self::Assign { .. } => KEY,
+            Self::Transfer { .. } => U64,
+            Self::CreateAccountWithSeed { seed, .. } => KEY + string(seed) + U64 + U64 + KEY,
+            Self::AdvanceNonceAccount | Self::UpgradeNonceAccount => 0,
+            Self::WithdrawNonceAccount(_) => U64,
+            Self::InitializeNonceAccount(_) | Self::AuthorizeNonceAccount(_) => KEY,
+            Self::Allocate { .. } => U64,
+            Self::AllocateWithSeed { seed, .. } => KEY + string(seed) + U64 + KEY,
+            Self::AssignWithSeed { seed, .. } => KEY + string(seed) + KEY,
+            Self::TransferWithSeed { from_seed, .. } => U64 + string(from_seed) + KEY,
+        }
+    }
+
+    /// Serialize the instruction data.
     pub fn serialize(&self) -> Vec<u8> {
+        fn put_string(data: &mut Vec<u8>, s: &str) {
+            data.extend_from_slice(&(s.len() as u64).to_le_bytes());
+            data.extend_from_slice(s.as_bytes());
+        }
+
         let mut data = Vec::with_capacity(self.size());
+        data.extend_from_slice(&self.index().to_le_bytes());
         match self {
             Self::CreateAccount {
                 lamports,
                 space,
                 owner,
             } => {
-                data.extend_from_slice(&[0, 0, 0, 0]); // instruction index
                 data.extend_from_slice(&lamports.to_le_bytes());
                 data.extend_from_slice(&space.to_le_bytes());
                 data.extend_from_slice(owner.as_bytes());
             }
-            Self::Assign { owner } => {
-                data.extend_from_slice(&[1, 0, 0, 0]); // instruction index
-                data.extend_from_slice(owner.as_bytes());
-            }
-            Self::Transfer { lamports } => {
-                data.extend_from_slice(&[2, 0, 0, 0]); // instruction index
+            Self::Assign { owner } => data.extend_from_slice(owner.as_bytes()),
+            Self::Transfer { lamports } | Self::WithdrawNonceAccount(lamports) => {
                 data.extend_from_slice(&lamports.to_le_bytes());
             }
             Self::CreateAccountWithSeed {
@@ -179,77 +175,75 @@ impl SystemInstruction {
                 space,
                 owner,
             } => {
-                data.extend_from_slice(&[3, 0, 0, 0]); // instruction index
                 data.extend_from_slice(base.as_bytes());
-                let seed_bytes = seed.as_bytes();
-                data.extend_from_slice(&(seed_bytes.len() as u32).to_le_bytes());
-                data.extend_from_slice(seed_bytes);
+                put_string(&mut data, seed);
                 data.extend_from_slice(&lamports.to_le_bytes());
                 data.extend_from_slice(&space.to_le_bytes());
                 data.extend_from_slice(owner.as_bytes());
             }
-            Self::AdvanceNonceAccount { authorized } => {
-                data.extend_from_slice(&[4, 0, 0, 0]); // instruction index
-                data.extend_from_slice(authorized.as_bytes());
+            Self::AdvanceNonceAccount | Self::UpgradeNonceAccount => {}
+            Self::InitializeNonceAccount(authority) | Self::AuthorizeNonceAccount(authority) => {
+                data.extend_from_slice(authority.as_bytes());
             }
-            Self::WithdrawNonceAccount { lamports } => {
-                data.extend_from_slice(&[5, 0, 0, 0]); // instruction index
-                data.extend_from_slice(&lamports.to_le_bytes());
-            }
-            Self::InitializeNonceAccount { authorized } => {
-                data.extend_from_slice(&[6, 0, 0, 0]); // instruction index
-                data.extend_from_slice(authorized.as_bytes());
-            }
-            Self::AuthorizeNonceAccount { authorized } => {
-                data.extend_from_slice(&[7, 0, 0, 0]); // instruction index
-                data.extend_from_slice(authorized.as_bytes());
-            }
-            Self::Allocate { space } => {
-                data.extend_from_slice(&[8, 0, 0, 0]); // instruction index
-                data.extend_from_slice(&space.to_le_bytes());
-            }
+            Self::Allocate { space } => data.extend_from_slice(&space.to_le_bytes()),
             Self::AllocateWithSeed {
                 base,
                 seed,
                 space,
                 owner,
             } => {
-                data.extend_from_slice(&[9, 0, 0, 0]); // instruction index
                 data.extend_from_slice(base.as_bytes());
-                let seed_bytes = seed.as_bytes();
-                data.extend_from_slice(&(seed_bytes.len() as u32).to_le_bytes());
-                data.extend_from_slice(seed_bytes);
+                put_string(&mut data, seed);
                 data.extend_from_slice(&space.to_le_bytes());
                 data.extend_from_slice(owner.as_bytes());
             }
             Self::AssignWithSeed { base, seed, owner } => {
-                data.extend_from_slice(&[10, 0, 0, 0]); // instruction index
                 data.extend_from_slice(base.as_bytes());
-                let seed_bytes = seed.as_bytes();
-                data.extend_from_slice(&(seed_bytes.len() as u32).to_le_bytes());
-                data.extend_from_slice(seed_bytes);
+                put_string(&mut data, seed);
                 data.extend_from_slice(owner.as_bytes());
             }
             Self::TransferWithSeed {
                 lamports,
-                seed,
-                owner,
+                from_seed,
+                from_owner,
             } => {
-                data.extend_from_slice(&[11, 0, 0, 0]); // instruction index
                 data.extend_from_slice(&lamports.to_le_bytes());
-                let seed_bytes = seed.as_bytes();
-                data.extend_from_slice(&(seed_bytes.len() as u32).to_le_bytes());
-                data.extend_from_slice(seed_bytes);
-                data.extend_from_slice(owner.as_bytes());
+                put_string(&mut data, from_seed);
+                data.extend_from_slice(from_owner.as_bytes());
             }
         }
         data
     }
 }
 
-// Helper functions for creating system program instructions
+/// Instruction data prefix of `SystemInstruction::AdvanceNonceAccount`.
+const ADVANCE_NONCE_ACCOUNT_DATA: [u8; 4] = [4, 0, 0, 0];
 
-/// Create a new account
+/// Whether `instruction` is a System `AdvanceNonceAccount`, which marks a durable-nonce
+/// transaction when it is the first instruction.
+pub(crate) fn is_advance_nonce_instruction(instruction: &Instruction) -> bool {
+    instruction.program_id == system_program()
+        && instruction.data.starts_with(&ADVANCE_NONCE_ACCOUNT_DATA)
+}
+
+/// The nonce account of a durable-nonce instruction list, if any.
+pub(crate) fn durable_nonce_account(instructions: &[Instruction]) -> Option<Pubkey> {
+    instructions
+        .first()
+        .filter(|instruction| is_advance_nonce_instruction(instruction))
+        .and_then(|instruction| instruction.accounts.first())
+        .map(|meta| meta.pubkey)
+}
+
+fn system_instruction(instruction: SystemInstruction, accounts: Vec<AccountMeta>) -> Instruction {
+    Instruction {
+        program_id: system_program(),
+        accounts,
+        data: instruction.serialize(),
+    }
+}
+
+/// Create a new account.
 pub fn create_account(
     from_pubkey: &Pubkey,
     to_pubkey: &Pubkey,
@@ -257,152 +251,168 @@ pub fn create_account(
     space: u64,
     owner: &Pubkey,
 ) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *from_pubkey,
-            is_signer: true,
-            is_writable: true,
+    system_instruction(
+        SystemInstruction::CreateAccount {
+            lamports,
+            space,
+            owner: *owner,
         },
-        AccountMeta {
-            pubkey: *to_pubkey,
-            is_signer: true,
-            is_writable: true,
-        },
-    ];
-
-    let instruction = SystemInstruction::CreateAccount {
-        lamports,
-        space,
-        owner: *owner,
-    };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+        vec![
+            AccountMeta::new_signer_writable(*from_pubkey),
+            AccountMeta::new_signer_writable(*to_pubkey),
+        ],
+    )
 }
 
-/// Assign an account to a program
+/// Create a new account at an address derived with
+/// [`create_with_seed`](crate::create_with_seed)`(base, seed, owner)`.
+pub fn create_account_with_seed(
+    from_pubkey: &Pubkey,
+    to_pubkey: &Pubkey,
+    base: &Pubkey,
+    seed: &str,
+    lamports: u64,
+    space: u64,
+    owner: &Pubkey,
+) -> Instruction {
+    let mut accounts = vec![
+        AccountMeta::new_signer_writable(*from_pubkey),
+        AccountMeta::new_writable(*to_pubkey),
+    ];
+    if base != from_pubkey {
+        accounts.push(AccountMeta::new_signer(*base));
+    }
+    system_instruction(
+        SystemInstruction::CreateAccountWithSeed {
+            base: *base,
+            seed: seed.to_string(),
+            lamports,
+            space,
+            owner: *owner,
+        },
+        accounts,
+    )
+}
+
+/// Assign an account to a program.
 pub fn assign(pubkey: &Pubkey, owner: &Pubkey) -> Instruction {
-    let account_metas = vec![AccountMeta {
-        pubkey: *pubkey,
-        is_signer: true,
-        is_writable: true,
-    }];
-
-    let instruction = SystemInstruction::Assign { owner: *owner };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+    system_instruction(
+        SystemInstruction::Assign { owner: *owner },
+        vec![AccountMeta::new_signer_writable(*pubkey)],
+    )
 }
 
-/// Transfer lamports from one account to another
+/// Assign an account derived from `base` and `seed` to a program.
+pub fn assign_with_seed(pubkey: &Pubkey, base: &Pubkey, seed: &str, owner: &Pubkey) -> Instruction {
+    system_instruction(
+        SystemInstruction::AssignWithSeed {
+            base: *base,
+            seed: seed.to_string(),
+            owner: *owner,
+        },
+        vec![
+            AccountMeta::new_writable(*pubkey),
+            AccountMeta::new_signer(*base),
+        ],
+    )
+}
+
+/// Transfer lamports from one account to another.
 pub fn transfer(from_pubkey: &Pubkey, to_pubkey: &Pubkey, lamports: u64) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *from_pubkey,
-            is_signer: true,
-            is_writable: true,
-        },
-        AccountMeta {
-            pubkey: *to_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-    ];
-
-    let instruction = SystemInstruction::Transfer { lamports };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+    system_instruction(
+        SystemInstruction::Transfer { lamports },
+        vec![
+            AccountMeta::new_signer_writable(*from_pubkey),
+            AccountMeta::new_writable(*to_pubkey),
+        ],
+    )
 }
 
-/// Advance a nonce account
+/// Transfer lamports from an account derived from `from_base` and `from_seed`.
+pub fn transfer_with_seed(
+    from_pubkey: &Pubkey,
+    from_base: &Pubkey,
+    from_seed: &str,
+    from_owner: &Pubkey,
+    to_pubkey: &Pubkey,
+    lamports: u64,
+) -> Instruction {
+    system_instruction(
+        SystemInstruction::TransferWithSeed {
+            lamports,
+            from_seed: from_seed.to_string(),
+            from_owner: *from_owner,
+        },
+        vec![
+            AccountMeta::new_writable(*from_pubkey),
+            AccountMeta::new_signer(*from_base),
+            AccountMeta::new_writable(*to_pubkey),
+        ],
+    )
+}
+
+/// Allocate space in an account without funding it.
+pub fn allocate(pubkey: &Pubkey, space: u64) -> Instruction {
+    system_instruction(
+        SystemInstruction::Allocate { space },
+        vec![AccountMeta::new_signer_writable(*pubkey)],
+    )
+}
+
+/// Allocate space for and assign an account derived from `base` and `seed`.
+pub fn allocate_with_seed(
+    pubkey: &Pubkey,
+    base: &Pubkey,
+    seed: &str,
+    space: u64,
+    owner: &Pubkey,
+) -> Instruction {
+    system_instruction(
+        SystemInstruction::AllocateWithSeed {
+            base: *base,
+            seed: seed.to_string(),
+            space,
+            owner: *owner,
+        },
+        vec![
+            AccountMeta::new_writable(*pubkey),
+            AccountMeta::new_signer(*base),
+        ],
+    )
+}
+
+/// Advance a nonce account. A durable-nonce transaction must use this as its first instruction.
 pub fn advance_nonce_account(nonce_pubkey: &Pubkey, authorized_pubkey: &Pubkey) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *nonce_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-        // Recent blockhashes sysvar
-        AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRecentB1ockHashes11111111111111111111").unwrap(),
-            is_signer: false,
-            is_writable: false,
-        },
-        AccountMeta {
-            pubkey: *authorized_pubkey,
-            is_signer: true,
-            is_writable: false,
-        },
-    ];
-
-    let instruction = SystemInstruction::AdvanceNonceAccount {
-        authorized: *authorized_pubkey,
-    };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+    system_instruction(
+        SystemInstruction::AdvanceNonceAccount,
+        vec![
+            AccountMeta::new_writable(*nonce_pubkey),
+            AccountMeta::new_readonly(recent_blockhashes_sysvar()),
+            AccountMeta::new_signer(*authorized_pubkey),
+        ],
+    )
 }
 
-/// Withdraw lamports from a nonce account
+/// Withdraw lamports from a nonce account.
 pub fn withdraw_nonce_account(
     nonce_pubkey: &Pubkey,
     authorized_pubkey: &Pubkey,
     to_pubkey: &Pubkey,
     lamports: u64,
 ) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *nonce_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-        AccountMeta {
-            pubkey: *to_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-        // Recent blockhashes sysvar
-        AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRecentB1ockHashes11111111111111111111").unwrap(),
-            is_signer: false,
-            is_writable: false,
-        },
-        // Rent sysvar
-        AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRent111111111111111111111111111111111").unwrap(),
-            is_signer: false,
-            is_writable: false,
-        },
-        AccountMeta {
-            pubkey: *authorized_pubkey,
-            is_signer: true,
-            is_writable: false,
-        },
-    ];
-
-    let instruction = SystemInstruction::WithdrawNonceAccount { lamports };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+    system_instruction(
+        SystemInstruction::WithdrawNonceAccount(lamports),
+        vec![
+            AccountMeta::new_writable(*nonce_pubkey),
+            AccountMeta::new_writable(*to_pubkey),
+            AccountMeta::new_readonly(recent_blockhashes_sysvar()),
+            AccountMeta::new_readonly(rent_sysvar()),
+            AccountMeta::new_signer(*authorized_pubkey),
+        ],
+    )
 }
 
-/// Create a nonce account
+/// Create and initialize a nonce account.
 pub fn create_nonce_account(
     from_pubkey: &Pubkey,
     nonce_pubkey: &Pubkey,
@@ -410,193 +420,344 @@ pub fn create_nonce_account(
     lamports: u64,
 ) -> Vec<Instruction> {
     vec![
-        // Create the nonce account
         create_account(
             from_pubkey,
             nonce_pubkey,
             lamports,
-            80, // Space for a nonce account
-            &Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
+            NONCE_STATE_SIZE,
+            &system_program(),
         ),
-        // Initialize the nonce account
         initialize_nonce_account(nonce_pubkey, authority_pubkey),
     ]
 }
 
-/// Initialize a nonce account
-pub fn initialize_nonce_account(nonce_pubkey: &Pubkey, authority_pubkey: &Pubkey) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *nonce_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-        // Recent blockhashes sysvar
-        AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRecentB1ockHashes11111111111111111111").unwrap(),
-            is_signer: false,
-            is_writable: false,
-        },
-        // Rent sysvar
-        AccountMeta {
-            pubkey: Pubkey::from_base58("SysvarRent111111111111111111111111111111111").unwrap(),
-            is_signer: false,
-            is_writable: false,
-        },
-    ];
-
-    let instruction = SystemInstruction::InitializeNonceAccount {
-        authorized: *authority_pubkey,
-    };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+/// Create and initialize a nonce account at an address derived from `base` and `seed`.
+pub fn create_nonce_account_with_seed(
+    from_pubkey: &Pubkey,
+    nonce_pubkey: &Pubkey,
+    base: &Pubkey,
+    seed: &str,
+    authority_pubkey: &Pubkey,
+    lamports: u64,
+) -> Vec<Instruction> {
+    vec![
+        create_account_with_seed(
+            from_pubkey,
+            nonce_pubkey,
+            base,
+            seed,
+            lamports,
+            NONCE_STATE_SIZE,
+            &system_program(),
+        ),
+        initialize_nonce_account(nonce_pubkey, authority_pubkey),
+    ]
 }
 
-/// Authorize a different authority for a nonce account
+/// Initialize a nonce account. Must be in the same transaction that creates the account.
+pub fn initialize_nonce_account(nonce_pubkey: &Pubkey, authority_pubkey: &Pubkey) -> Instruction {
+    system_instruction(
+        SystemInstruction::InitializeNonceAccount(*authority_pubkey),
+        vec![
+            AccountMeta::new_writable(*nonce_pubkey),
+            AccountMeta::new_readonly(recent_blockhashes_sysvar()),
+            AccountMeta::new_readonly(rent_sysvar()),
+        ],
+    )
+}
+
+/// Change the authority of a nonce account.
 pub fn authorize_nonce_account(
     nonce_pubkey: &Pubkey,
     authority_pubkey: &Pubkey,
     new_authority_pubkey: &Pubkey,
 ) -> Instruction {
-    let account_metas = vec![
-        AccountMeta {
-            pubkey: *nonce_pubkey,
-            is_signer: false,
-            is_writable: true,
-        },
-        AccountMeta {
-            pubkey: *authority_pubkey,
-            is_signer: true,
-            is_writable: false,
-        },
-    ];
+    system_instruction(
+        SystemInstruction::AuthorizeNonceAccount(*new_authority_pubkey),
+        vec![
+            AccountMeta::new_writable(*nonce_pubkey),
+            AccountMeta::new_signer(*authority_pubkey),
+        ],
+    )
+}
 
-    let instruction = SystemInstruction::AuthorizeNonceAccount {
-        authorized: *new_authority_pubkey,
-    };
-
-    Instruction {
-        program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-        accounts: account_metas,
-        data: instruction.serialize(),
-    }
+/// Upgrade a legacy nonce account.
+pub fn upgrade_nonce_account(nonce_pubkey: &Pubkey) -> Instruction {
+    system_instruction(
+        SystemInstruction::UpgradeNonceAccount,
+        vec![AccountMeta::new_writable(*nonce_pubkey)],
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Pubkey;
+    use crate::test_utils::{key, meta};
+    use hexlit::hex;
 
-    fn from_pubkey() -> Pubkey {
-        Pubkey::from_base58("7o36UsWR1JQLpZ9PE2gn9L4SQ69CNNiWAXd4Jt7rqz9Z").unwrap()
-    }
+    // Vectors from `solana-system-interface` 3.3 (`bincode` feature).
+    const SYSTEM: &str = "11111111111111111111111111111111";
+    const RECENT_BLOCKHASHES: &str = "SysvarRecentB1ockHashes11111111111111111111";
+    const RENT: &str = "SysvarRent111111111111111111111111111111111";
+    const FROM: &str = "8ukkSPFecLhdnkzp6s1h6zLSLkPzDPk1oaMuaM6Rxmjr";
+    const TO: &str = "7t7yfuynrNBBRtHpwC9Vn2QwAcMxuUE3Y6nt27LP413E";
+    const BASE: &str = "Ef37CudiH2EeQegAn9gGUjKrGCwf5ksMzXnSAPpWtv17";
+    const NONCE: &str = "96GzYFvs4dEeswTaQFQhvbGi6NHUcNHhEgXnPrRjyF2s";
+    const AUTHORITY: &str = "Af2Y56WUFQuTTTYHMCjMozYsDxvTvSM6YQnyv8E6EK3v";
+    const OWNER: [u8; 32] =
+        hex!("4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581");
 
-    fn to_pubkey() -> Pubkey {
-        Pubkey::from_base58("DShWnroshVbeUp28oopA3Pu7oFPDBtC1DBmPECXXAQ9n").unwrap()
-    }
-
-    fn owner_pubkey() -> Pubkey {
-        Pubkey::from_base58("Hozo7TadHq6PMMiGLGNvgk79Hvj5VTAM7Ny2bamQ2m8q").unwrap()
+    fn check(ix: &Instruction, accounts: &[AccountMeta], data: &[u8]) {
+        assert_eq!(ix.program_id, crate::test_utils::pubkey(SYSTEM));
+        assert_eq!(ix.accounts, accounts);
+        assert_eq!(ix.data, data);
     }
 
     #[test]
-    fn test_sys_create_account() {
-        let from = from_pubkey();
-        let to = to_pubkey();
-        let owner = owner_pubkey();
-        let lamports = 10_000_000_000; // 10 SOL
-        let space = 165; // typical account size
+    fn fixture_keys_match_upstream() {
+        assert_eq!(key("from").to_base58(), FROM);
+        assert_eq!(key("to").to_base58(), TO);
+        assert_eq!(key("base").to_base58(), BASE);
+        assert_eq!(key("nonce").to_base58(), NONCE);
+        assert_eq!(key("authority").to_base58(), AUTHORITY);
+        assert_eq!(key("owner").as_bytes(), &OWNER);
+    }
 
-        let instruction = create_account(&from, &to, lamports, space, &owner);
-
-        // Verify instruction details
-        assert_eq!(
-            instruction.program_id,
-            Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap()
+    #[test]
+    fn create_account_matches_upstream() {
+        let ix = create_account(&key("from"), &key("to"), 1_000_000_007, 165, &key("owner"));
+        check(
+            &ix,
+            &[meta(FROM, true, true), meta(TO, true, true)],
+            &hex!(
+                "00000000 07ca9a3b00000000 a500000000000000"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
         );
-        assert_eq!(instruction.accounts.len(), 2);
+    }
 
-        // From account
-        assert_eq!(instruction.accounts[0].pubkey, from);
-        assert!(instruction.accounts[0].is_signer);
-        assert!(instruction.accounts[0].is_writable);
+    #[test]
+    fn create_account_with_seed_matches_upstream() {
+        let ix = create_account_with_seed(
+            &key("from"),
+            &key("to"),
+            &key("base"),
+            "seed-123",
+            42,
+            80,
+            &key("owner"),
+        );
+        check(
+            &ix,
+            &[
+                meta(FROM, true, true),
+                meta(TO, false, true),
+                meta(BASE, true, false),
+            ],
+            &hex!(
+                "03000000"
+                "cae662172fd450bb0cd710a769079c05bfc5d8e35efa6576edc7d0377afdd4a2"
+                "0800000000000000 736565642d313233"
+                "2a00000000000000 5000000000000000"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
+        );
 
-        // To account
-        assert_eq!(instruction.accounts[1].pubkey, to);
-        assert!(instruction.accounts[1].is_signer);
-        assert!(instruction.accounts[1].is_writable);
+        // The base account is only listed separately when it isn't the funder.
+        let ix = create_account_with_seed(
+            &key("from"),
+            &key("to"),
+            &key("from"),
+            "s",
+            42,
+            80,
+            &key("owner"),
+        );
+        check(
+            &ix,
+            &[meta(FROM, true, true), meta(TO, false, true)],
+            &hex!(
+                "03000000"
+                "75857a45899985be4c4d941e90b6b396d6c92a4c7437aaf0bf102089fe21379d"
+                "0100000000000000 73"
+                "2a00000000000000 5000000000000000"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
+        );
+    }
 
-        // Validate data format
-        let data = instruction.data.clone();
+    #[test]
+    fn assign_matches_upstream() {
+        check(
+            &assign(&key("from"), &key("owner")),
+            &[meta(FROM, true, true)],
+            &hex!("01000000 4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"),
+        );
+        check(
+            &assign_with_seed(&key("to"), &key("base"), "assign-seed", &key("owner")),
+            &[meta(TO, false, true), meta(BASE, true, false)],
+            &hex!(
+                "0a000000"
+                "cae662172fd450bb0cd710a769079c05bfc5d8e35efa6576edc7d0377afdd4a2"
+                "0b00000000000000 61737369676e2d73656564"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
+        );
+    }
 
-        // First byte should be 0 (create account instruction index)
-        assert_eq!(data[0], 0);
+    #[test]
+    fn transfer_matches_upstream() {
+        check(
+            &transfer(&key("from"), &key("to"), 123_456_789),
+            &[meta(FROM, true, true), meta(TO, false, true)],
+            &hex!("02000000 15cd5b0700000000"),
+        );
+        check(
+            &transfer_with_seed(
+                &key("from"),
+                &key("base"),
+                "transfer-seed",
+                &key("owner"),
+                &key("to"),
+                99,
+            ),
+            &[
+                meta(FROM, false, true),
+                meta(BASE, true, false),
+                meta(TO, false, true),
+            ],
+            &hex!(
+                "0b000000 6300000000000000"
+                "0d00000000000000 7472616e736665722d73656564"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
+        );
+    }
 
-        // Skip detailed validation of serialized values due to potential serialization discrepancies
-        // Just verify the instruction format is correct overall
+    #[test]
+    fn allocate_matches_upstream() {
+        check(
+            &allocate(&key("from"), 4096),
+            &[meta(FROM, true, true)],
+            &hex!("08000000 0010000000000000"),
+        );
+        check(
+            &allocate_with_seed(&key("to"), &key("base"), "alloc-seed", 2048, &key("owner")),
+            &[meta(TO, false, true), meta(BASE, true, false)],
+            &hex!(
+                "09000000"
+                "cae662172fd450bb0cd710a769079c05bfc5d8e35efa6576edc7d0377afdd4a2"
+                "0a00000000000000 616c6c6f632d73656564"
+                "0008000000000000"
+                "4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581"
+            ),
+        );
+    }
 
-        // Instruction should be the right length for a CreateAccount instruction
-        assert_eq!(
-            data.len(),
+    #[test]
+    fn nonce_instructions_match_upstream() {
+        let (nonce, authority) = (key("nonce"), key("authority"));
+
+        // AdvanceNonceAccount is a unit variant: the authority is only an account meta.
+        check(
+            &advance_nonce_account(&nonce, &authority),
+            &[
+                meta(NONCE, false, true),
+                meta(RECENT_BLOCKHASHES, false, false),
+                meta(AUTHORITY, true, false),
+            ],
+            &hex!("04000000"),
+        );
+        check(
+            &withdraw_nonce_account(&nonce, &authority, &key("to"), 5_000),
+            &[
+                meta(NONCE, false, true),
+                meta(TO, false, true),
+                meta(RECENT_BLOCKHASHES, false, false),
+                meta(RENT, false, false),
+                meta(AUTHORITY, true, false),
+            ],
+            &hex!("05000000 8813000000000000"),
+        );
+
+        let create = create_nonce_account(&key("from"), &nonce, &authority, 1_447_680);
+        check(
+            &create[0],
+            &[meta(FROM, true, true), meta(NONCE, true, true)],
+            &hex!(
+                "00000000 0017160000000000 5000000000000000"
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            ),
+        );
+        check(
+            &create[1],
+            &[
+                meta(NONCE, false, true),
+                meta(RECENT_BLOCKHASHES, false, false),
+                meta(RENT, false, false),
+            ],
+            &hex!("06000000 8f76fd501bb68ef71f4e276bc28f29bce1003b0c2c9d9478de81b5bfc0cde1e9"),
+        );
+        check(
+            &authorize_nonce_account(&nonce, &authority, &key("new_authority")),
+            &[meta(NONCE, false, true), meta(AUTHORITY, true, false)],
+            &hex!("07000000 0489533a40c0b90efe0346163b6865cc8fff89463e5600c10b44ab366a248d31"),
+        );
+        check(
+            &upgrade_nonce_account(&nonce),
+            &[meta(NONCE, false, true)],
+            &hex!("0c000000"),
+        );
+    }
+
+    #[test]
+    fn size_matches_serialized_length() {
+        let (base, owner) = (key("base"), key("owner"));
+        let seed = "seed-of-some-length".to_string();
+        let instructions = [
             SystemInstruction::CreateAccount {
-                lamports,
-                space,
+                lamports: 1,
+                space: 2,
                 owner,
-            }
-            .size()
-        );
-
-        // Remaining bytes are owner pubkey (last 32 bytes)
-        assert_eq!(&data[data.len() - 32..], owner.as_bytes());
-    }
-
-    #[test]
-    fn test_short_vec_encode() {
-        // This test verifies the short vector encoding logic used in Solana transactions
-        // Short vectors are encoded as:
-        // - If length <= 127, encode as a single byte
-        // - Otherwise, encode as multiple bytes with MSB set
-
-        // Create a test instruction with multiple accounts to trigger short vec encoding
-        let from = from_pubkey();
-        let to = to_pubkey();
-        let owner = owner_pubkey();
-
-        // Basic instruction with 3 accounts - will use short vector encoding
-        let accounts = vec![
-            AccountMeta {
-                pubkey: from,
-                is_signer: true,
-                is_writable: true,
             },
-            AccountMeta {
-                pubkey: to,
-                is_signer: false,
-                is_writable: true,
+            SystemInstruction::Assign { owner },
+            SystemInstruction::Transfer { lamports: 1 },
+            SystemInstruction::CreateAccountWithSeed {
+                base,
+                seed: seed.clone(),
+                lamports: 1,
+                space: 2,
+                owner,
             },
-            AccountMeta {
-                pubkey: owner,
-                is_signer: false,
-                is_writable: false,
+            SystemInstruction::AdvanceNonceAccount,
+            SystemInstruction::WithdrawNonceAccount(1),
+            SystemInstruction::InitializeNonceAccount(owner),
+            SystemInstruction::AuthorizeNonceAccount(owner),
+            SystemInstruction::Allocate { space: 1 },
+            SystemInstruction::AllocateWithSeed {
+                base,
+                seed: seed.clone(),
+                space: 1,
+                owner,
             },
+            SystemInstruction::AssignWithSeed {
+                base,
+                seed: seed.clone(),
+                owner,
+            },
+            SystemInstruction::TransferWithSeed {
+                lamports: 1,
+                from_seed: seed,
+                from_owner: owner,
+            },
+            SystemInstruction::UpgradeNonceAccount,
         ];
-
-        // Create instruction with the accounts
-        let instruction = Instruction {
-            program_id: Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap(),
-            accounts,
-            data: vec![0, 1, 2, 3], // Some dummy data
-        };
-
-        // Convert to Message::to_bytes or a similar construct
-        // The number of accounts (3) should be encoded as a single byte (0x03)
-        // Check this in a transaction builder test or similar logic
-
-        // For now we'll just assert that the number of accounts is correct
-        assert_eq!(instruction.accounts.len(), 3);
+        for instruction in instructions {
+            assert_eq!(
+                instruction.serialize().len(),
+                instruction.size(),
+                "{instruction:?}"
+            );
+        }
     }
 }

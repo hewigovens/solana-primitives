@@ -1,3 +1,4 @@
+use crate::instructions::system::durable_nonce_account;
 use crate::{
     AccountMeta, AddressLookupTableAccount, CompiledInstruction, Instruction, Message,
     MessageAddressTableLookup, MessageHeader, Pubkey, Result, SignatureBytes, SolanaError,
@@ -240,11 +241,13 @@ impl TransactionBuilder {
             }
         }
 
-        let program_ids: HashSet<Pubkey> = self
+        // Programs, signers, and the durable nonce account must stay static.
+        let mut static_only: HashSet<Pubkey> = self
             .instructions
             .iter()
             .map(|instruction| instruction.program_id)
             .collect();
+        static_only.extend(durable_nonce_account(&self.instructions));
 
         let mut flags: HashMap<Pubkey, (bool, bool)> = HashMap::new();
         let mut order: Vec<Pubkey> = Vec::new();
@@ -285,7 +288,7 @@ impl TransactionBuilder {
                 .copied()
                 .ok_or(SolanaError::InvalidMessage)?;
 
-            if is_signer || program_ids.contains(pubkey) || !lookup_map.contains_key(pubkey) {
+            if is_signer || static_only.contains(pubkey) || !lookup_map.contains_key(pubkey) {
                 let bucket = match (is_signer, is_writable) {
                     (true, true) => 0,
                     (true, false) => 1,
@@ -437,7 +440,7 @@ mod tests {
     use crate::builder::InstructionBuilder;
     use crate::instructions::{
         program_ids::{system_program, token_program},
-        system::{create_account, transfer},
+        system::{advance_nonce_account, create_account, transfer},
         token::transfer_checked,
     };
     use crate::types::instruction::AccountMeta;
@@ -723,6 +726,37 @@ mod tests {
             }
             _ => panic!("expected v0 transaction"),
         }
+    }
+
+    #[test]
+    fn test_v0_builder_keeps_durable_nonce_account_static() {
+        let fee_payer = payer_pubkey();
+        let nonce = Pubkey::new([42u8; 32]);
+        let recipient = Pubkey::new([43u8; 32]);
+        let recent_blockhashes = crate::instructions::program_ids::recent_blockhashes_sysvar();
+        let lookup_table = AddressLookupTableAccount::new(
+            Pubkey::new([99u8; 32]),
+            vec![nonce, recipient, recent_blockhashes],
+        );
+
+        let mut builder = TransactionBuilder::new(fee_payer, test_blockhash());
+        builder.add_instructions([
+            advance_nonce_account(&nonce, &fee_payer),
+            transfer(&fee_payer, &recipient, 7),
+        ]);
+        let transaction = builder.build_v0(&[lookup_table]).unwrap();
+
+        let VersionedTransaction::V0 { message, .. } = transaction else {
+            panic!("expected v0 transaction");
+        };
+        // The nonce account is writable and in the table, but must not be looked up.
+        assert!(message.account_keys.contains(&nonce));
+        assert_eq!(message.address_table_lookups.len(), 1);
+        assert_eq!(message.address_table_lookups[0].writable_indexes, vec![1]);
+        assert_eq!(message.address_table_lookups[0].readonly_indexes, vec![2]);
+        // AdvanceNonceAccount's first account resolves to the static nonce key.
+        let nonce_index = message.instructions[0].accounts[0] as usize;
+        assert_eq!(message.account_keys[nonce_index], nonce);
     }
 
     #[test]

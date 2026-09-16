@@ -1,12 +1,11 @@
-use crate::instructions::program_ids::{compute_budget_program, system_program};
+use crate::instructions::program_ids::compute_budget_program;
+use crate::instructions::system::is_advance_nonce_instruction;
 use crate::types::Instruction;
 
 /// Compute budget instruction discriminant for setting compute unit limit.
 pub const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
 /// Compute budget instruction discriminant for setting compute unit price.
 pub const SET_COMPUTE_UNIT_PRICE_DISCRIMINANT: u8 = 3;
-/// System program instruction discriminant for `AdvanceNonceAccount` (4-byte LE encoded).
-const ADVANCE_NONCE_ACCOUNT_DISCRIMINANT: [u8; 4] = [4, 0, 0, 0];
 
 /// Compute Budget Instructions
 pub enum ComputeBudgetInstruction {
@@ -152,14 +151,11 @@ pub fn ensure_compute_unit_price(instructions: &mut Vec<Instruction>, micro_lamp
     }
 
     // Durable-nonce txs require AdvanceNonceAccount as instruction 0; insert after it.
-    let insert_pos = if instructions.first().is_some_and(|ix| {
-        ix.program_id == system_program()
-            && ix.data.get(0..4) == Some(&ADVANCE_NONCE_ACCOUNT_DISCRIMINANT[..])
-    }) {
-        1
-    } else {
-        0
-    };
+    let insert_pos = usize::from(
+        instructions
+            .first()
+            .is_some_and(is_advance_nonce_instruction),
+    );
     instructions.insert(insert_pos, set_compute_unit_price(micro_lamports));
     true
 }

@@ -226,42 +226,35 @@ pub fn encode_length_to_compact_u16_bytes(len: usize) -> Result<Vec<u8>, String>
     Ok(bytes)
 }
 
-// Helper function to decode Compact-U16 length
-// Returns Ok((length, bytes_consumed)) or Err(message)
+/// Decode a compact-u16 from the start of `bytes`, returning `(value, bytes_consumed)`.
+///
+/// Rejects truncated input, non-canonical encodings (a zero continuation byte),
+/// and values above `u16::MAX`, matching `solana-short-vec`.
 pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), &'static str> {
-    if bytes.is_empty() {
-        return Err("Cannot decode length from empty slice");
+    const TRUNCATED: &str = "compact-u16 is truncated";
+    const ALIAS: &str = "compact-u16 is not canonically encoded";
+
+    let b0 = *bytes.first().ok_or(TRUNCATED)?;
+    if b0 < 0x80 {
+        return Ok((b0 as usize, 1));
     }
-    let mut len: usize = 0;
-    let mut size_of_len_encoding: usize = 0;
-    loop {
-        if size_of_len_encoding >= bytes.len() {
-            return Err("Byte slice too short for compact u16 length (within loop)");
-        }
-        let current_byte = bytes[size_of_len_encoding];
-        len |= (current_byte as usize & 0x7F) << (size_of_len_encoding * 7);
-        size_of_len_encoding += 1;
-        if (current_byte & 0x80) == 0 {
-            // MSB is 0, this is the last byte for the length
-            break;
-        }
-        // According to Solana's short_vec.rs, max 3 bytes for u16 values (up to 65535)
-        // 1 byte for 0-127
-        // 2 bytes for 128 - 16383
-        // 3 bytes for 16384 - 65535
-        if size_of_len_encoding >= 3 && (current_byte & 0x80) != 0 {
-            // If we've read 3 bytes and the 3rd byte still has MSB set, it's an invalid encoding for u16.
-            // Or if we are about to read a 4th byte for a u16 value.
-            // This check is to prevent overruns for u16. If len can be > u16::MAX, this check changes.
-            // For typical Solana message elements, lengths are expected to fit u16.
-            return Err("Compact u16 length encoding too long (max 3 bytes for u16 values)");
-        }
+    let b1 = *bytes.get(1).ok_or(TRUNCATED)?;
+    if b1 == 0 {
+        return Err(ALIAS);
     }
-    // A 3rd byte can still contribute up to 2,097,151; every caller expects u16-bounded.
-    if len > u16::MAX as usize {
-        return Err("Decoded length exceeds u16::MAX for compact-u16 encoding");
+    let low = (b0 & 0x7f) as usize;
+    if b1 < 0x80 {
+        return Ok((low | (b1 as usize) << 7, 2));
     }
-    Ok((len, size_of_len_encoding))
+    let b2 = *bytes.get(2).ok_or(TRUNCATED)?;
+    if b2 == 0 {
+        return Err(ALIAS);
+    }
+    // The third byte carries bits 14..16 and never has a continuation bit.
+    if b2 > 3 {
+        return Err("compact-u16 exceeds u16::MAX");
+    }
+    Ok((low | ((b1 & 0x7f) as usize) << 7 | (b2 as usize) << 14, 3))
 }
 
 /// If you don't want to use the ShortVec newtype, you can do ShortVec
@@ -360,23 +353,70 @@ impl<T> ShortVec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hexlit::hex;
+
+    // Encodings from `solana-short-vec` 3.3.
+    const ENCODINGS: [(u16, &[u8]); 10] = [
+        (0, &hex!("00")),
+        (1, &hex!("01")),
+        (127, &hex!("7f")),
+        (128, &hex!("8001")),
+        (255, &hex!("ff01")),
+        (256, &hex!("8002")),
+        (16383, &hex!("ff7f")),
+        (16384, &hex!("808001")),
+        (32767, &hex!("ffff01")),
+        (65535, &hex!("ffff03")),
+    ];
 
     #[test]
-    fn decode_compact_u16_len_rejects_values_above_u16_max() {
-        // Decodes to 2,097,151 without the u16 bound.
-        let bytes = [0xFF, 0xFF, 0x7F];
-        let result = decode_compact_u16_len(&bytes);
-        assert!(
-            result.is_err(),
-            "expected decode_compact_u16_len to reject a length exceeding u16::MAX, got {result:?}"
-        );
+    fn encode_matches_upstream() {
+        for (value, bytes) in ENCODINGS {
+            assert_eq!(
+                encode_length_to_compact_u16_bytes(value as usize).unwrap(),
+                bytes
+            );
+        }
+        assert!(encode_length_to_compact_u16_bytes(u16::MAX as usize + 1).is_err());
     }
 
     #[test]
-    fn decode_compact_u16_len_accepts_u16_max() {
-        let bytes = [0xFF, 0xFF, 0x03];
-        let (len, consumed) = decode_compact_u16_len(&bytes).unwrap();
-        assert_eq!(len, u16::MAX as usize);
-        assert_eq!(consumed, 3);
+    fn decode_matches_upstream() {
+        for (value, bytes) in ENCODINGS {
+            assert_eq!(
+                decode_compact_u16_len(bytes).unwrap(),
+                (value as usize, bytes.len())
+            );
+            // Trailing input is left for the caller.
+            let mut padded = bytes.to_vec();
+            padded.push(0xff);
+            assert_eq!(
+                decode_compact_u16_len(&padded).unwrap(),
+                (value as usize, bytes.len())
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_what_upstream_rejects() {
+        let rejected: [&[u8]; 9] = [
+            &[],
+            &hex!("80"),
+            &hex!("8080"),
+            // aliases: a zero continuation byte
+            &hex!("8000"),
+            &hex!("8100"),
+            &hex!("808000"),
+            // overflow / continuation on the third byte
+            &hex!("ffff04"),
+            &hex!("808080"),
+            &hex!("ffff7f"),
+        ];
+        for bytes in rejected {
+            assert!(
+                decode_compact_u16_len(bytes).is_err(),
+                "{bytes:02x?} must be rejected"
+            );
+        }
     }
 }

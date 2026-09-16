@@ -62,65 +62,25 @@ impl Transaction {
         &self.message.instructions
     }
 
-    /// Deserialize a transaction from bytes
+    /// Deserialize a legacy transaction from wire bytes.
+    ///
+    /// Versioned (v0) transactions are rejected; use [`VersionedTransaction`] for those.
     pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self> {
-        if bytes.is_empty() {
-            return Err(SolanaError::DeserializationError(
-                "Empty transaction data".to_string(),
-            ));
-        }
-
-        // Signature count is shortvec-encoded
-        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
-            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
-
-        // Check if there are enough bytes for signatures
-        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
-            return Err(SolanaError::DeserializationError(
-                "Not enough bytes for signatures".to_string(),
-            ));
-        }
-
-        // Extract signatures
-        let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
-
-        for _ in 0..num_signatures {
-            if offset + 64 > bytes.len() {
-                return Err(SolanaError::DeserializationError(
-                    "Invalid signature data".to_string(),
-                ));
-            }
-
-            let sig_bytes: [u8; 64] = bytes[offset..offset + 64].try_into().map_err(|_| {
-                SolanaError::DeserializationError("Failed to convert signature bytes".to_string())
-            })?;
-
-            signatures.push(SignatureBytes::new(sig_bytes));
-            offset += 64;
-        }
-
-        // The rest is the message
-        let message_bytes = &bytes[offset..];
-
-        // Use our manual decoder to decode the legacy message
-        match manual_decode::decode_legacy_message(message_bytes, Vec::new()) {
-            Ok(VersionedTransaction::Legacy { message, .. }) => {
-                // We know this is a legacy message, convert to regular Message
-                let regular_message = Message {
+        match VersionedTransaction::deserialize_with_version(bytes)? {
+            VersionedTransaction::Legacy {
+                signatures,
+                message,
+            } => Ok(Self {
+                signatures,
+                message: Message {
                     header: message.header,
                     account_keys: message.account_keys,
                     recent_blockhash: message.recent_blockhash,
                     instructions: message.instructions,
-                };
-
-                Ok(Self {
-                    signatures,
-                    message: regular_message,
-                })
-            }
-            _ => Err(SolanaError::DeserializationError(
-                "Failed to decode legacy message for Transaction".to_string(),
+                },
+            }),
+            VersionedTransaction::V0 { .. } => Err(SolanaError::DeserializationError(
+                "expected a legacy transaction".to_string(),
             )),
         }
     }
@@ -529,49 +489,41 @@ impl VersionedTransaction {
         Ok(bytes)
     }
 
-    /// Deserialize a versioned transaction from bytes
+    /// Deserialize and sanitize a legacy or v0 transaction from wire bytes.
+    ///
+    /// The input must be exactly one transaction: truncated input, trailing bytes,
+    /// non-canonical compact-u16 lengths, and messages that fail Solana's
+    /// sanitization rules are all rejected.
     pub fn deserialize_with_version(bytes: &[u8]) -> Result<Self> {
-        if bytes.is_empty() {
-            return Err(SolanaError::DeserializationError(
-                "Empty transaction data".to_string(),
-            ));
+        // Legacy and v0 transactions start with a one-byte signature count (< 0x80);
+        // a set high bit would be a versioned message prefix.
+        let (&num_signatures, rest) = bytes.split_first().ok_or_else(|| {
+            SolanaError::DeserializationError("Empty transaction data".to_string())
+        })?;
+        if num_signatures & 0x80 != 0 {
+            return Err(SolanaError::DeserializationError(format!(
+                "invalid transaction discriminator: {num_signatures:#04x}"
+            )));
         }
 
-        // Signature count is shortvec-encoded
-        let (num_signatures, len_bytes_consumed) = crate::decode_compact_u16_len(bytes)
-            .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
-
-        // Check if there are enough bytes for signatures
-        if bytes.len() < len_bytes_consumed + (num_signatures * 64) {
+        let signatures_len = num_signatures as usize * 64;
+        if rest.len() < signatures_len {
             return Err(SolanaError::DeserializationError(
                 "Not enough bytes for signatures".to_string(),
             ));
         }
+        let (signature_bytes, message_bytes) = rest.split_at(signatures_len);
+        let signatures = signature_bytes
+            .as_chunks::<64>()
+            .0
+            .iter()
+            .copied()
+            .map(SignatureBytes::new)
+            .collect();
 
-        // Extract signatures
-        let mut signatures = Vec::with_capacity(num_signatures);
-        let mut offset = len_bytes_consumed; // Skip shortvec length bytes
-
-        for _ in 0..num_signatures {
-            if offset + 64 > bytes.len() {
-                return Err(SolanaError::DeserializationError(
-                    "Invalid signature data".to_string(),
-                ));
-            }
-
-            let sig_bytes: [u8; 64] = bytes[offset..offset + 64].try_into().map_err(|_| {
-                SolanaError::DeserializationError("Failed to convert signature bytes".to_string())
-            })?;
-
-            signatures.push(SignatureBytes::new(sig_bytes));
-            offset += 64;
-        }
-
-        // The rest is the message
-        let message_bytes = &bytes[offset..];
-
-        // Manually decode the message
-        self::manual_decode::decode_message(message_bytes, signatures)
+        let transaction = manual_decode::decode_message(message_bytes, signatures)?;
+        manual_decode::sanitize(&transaction)?;
+        Ok(transaction)
     }
 }
 
@@ -580,27 +532,86 @@ mod manual_decode {
     use super::*;
     use crate::types::MessageHeader;
 
-    /// Validates each header count against its own section, not just the total length.
-    fn validate_header_counts(header: &MessageHeader, account_keys_len: usize) -> Result<()> {
+    fn sanitize_error(message: &str) -> SolanaError {
+        SolanaError::DeserializationError(format!("invalid message: {message}"))
+    }
+
+    /// Solana's legacy/v0 message and signature sanitization rules.
+    pub fn sanitize(transaction: &VersionedTransaction) -> Result<()> {
+        let (header, account_keys, instructions, lookups) = match transaction {
+            VersionedTransaction::Legacy { message, .. } => (
+                &message.header,
+                &message.account_keys,
+                &message.instructions,
+                &[][..],
+            ),
+            VersionedTransaction::V0 { message, .. } => (
+                &message.header,
+                &message.account_keys,
+                &message.instructions,
+                &message.address_table_lookups[..],
+            ),
+        };
+
+        let num_static_keys = account_keys.len();
         let num_required_signatures = header.num_required_signatures as usize;
-        if num_required_signatures > account_keys_len {
-            return Err(SolanaError::DeserializationError(
-                "Message header num_required_signatures exceeds account_keys length".to_string(),
-            ));
-        }
-        if header.num_readonly_signed_accounts as usize > num_required_signatures {
-            return Err(SolanaError::DeserializationError(
-                "Message header num_readonly_signed_accounts exceeds num_required_signatures"
-                    .to_string(),
-            ));
-        }
-        if header.num_readonly_unsigned_accounts as usize
-            > account_keys_len - num_required_signatures
+        if num_required_signatures + header.num_readonly_unsigned_accounts as usize
+            > num_static_keys
         {
-            return Err(SolanaError::DeserializationError(
-                "Message header num_readonly_unsigned_accounts exceeds the number of unsigned accounts"
-                    .to_string(),
+            return Err(sanitize_error(
+                "header describes more accounts than account_keys",
             ));
+        }
+        // There must be at least one writable signer (the fee payer).
+        if header.num_readonly_signed_accounts >= header.num_required_signatures {
+            return Err(sanitize_error("no writable fee payer"));
+        }
+
+        let mut num_lookup_keys = 0usize;
+        for lookup in lookups {
+            let num_indexes = lookup.writable_indexes.len() + lookup.readonly_indexes.len();
+            if num_indexes == 0 {
+                return Err(sanitize_error("address table lookup loads no accounts"));
+            }
+            num_lookup_keys += num_indexes;
+        }
+        let num_keys = num_static_keys + num_lookup_keys;
+        // Account indexes are u8.
+        if num_keys > 256 {
+            return Err(sanitize_error("more than 256 accounts"));
+        }
+
+        for instruction in instructions {
+            // Programs must be static keys, and the fee payer can't be a program.
+            let program_index = instruction.program_id_index as usize;
+            if program_index == 0 || program_index >= num_static_keys {
+                return Err(sanitize_error("invalid program id index"));
+            }
+            if instruction
+                .accounts
+                .iter()
+                .any(|&index| index as usize >= num_keys)
+            {
+                return Err(sanitize_error("invalid account index"));
+            }
+        }
+
+        if transaction.signatures().len() != num_required_signatures {
+            return Err(SolanaError::DeserializationError(format!(
+                "signature count {} does not match num_required_signatures {}",
+                transaction.signatures().len(),
+                num_required_signatures
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_consumed(bytes: &[u8], offset: usize) -> Result<()> {
+        if offset != bytes.len() {
+            return Err(SolanaError::DeserializationError(format!(
+                "{} trailing bytes after message",
+                bytes.len() - offset
+            )));
         }
         Ok(())
     }
@@ -702,8 +713,6 @@ mod manual_decode {
             offset += 32;
         }
 
-        validate_header_counts(&header, account_keys.len())?;
-
         // Recent blockhash (always 32 bytes)
         if offset + 32 > bytes.len() {
             return Err(SolanaError::DeserializationError(
@@ -792,6 +801,7 @@ mod manual_decode {
             });
         }
 
+        ensure_consumed(bytes, offset)?;
         Ok(VersionedTransaction::Legacy {
             signatures,
             message: LegacyMessage {
@@ -848,8 +858,6 @@ mod manual_decode {
             offset += 32;
         }
 
-        validate_header_counts(&header, account_keys.len())?;
-
         // Recent blockhash (always 32 bytes)
         if offset + 32 > bytes.len() {
             return Err(SolanaError::DeserializationError(
@@ -938,11 +946,9 @@ mod manual_decode {
             });
         }
 
-        // Address table lookups (new in V0)
+        // The lookup count is required, even when zero.
         let mut address_table_lookups = Vec::new();
-
-        // Check if we have more data (for address table lookups)
-        if offset < bytes.len() {
+        {
             let (lookup_table_count, len_bytes_consumed) =
                 crate::decode_compact_u16_len(&bytes[offset..])
                     .map_err(|e| SolanaError::DeserializationError(e.to_string()))?;
@@ -1009,6 +1015,7 @@ mod manual_decode {
             }
         }
 
+        ensure_consumed(bytes, offset)?;
         Ok(VersionedTransaction::V0 {
             signatures,
             message: VersionedMessageV0 {
@@ -1134,82 +1141,163 @@ mod tests {
         );
     }
 
-    /// Builds a legacy-message prefix: header + `num_accounts` zero keys + zero blockhash.
-    fn legacy_message_prefix(header: [u8; 3], num_accounts: u8) -> Vec<u8> {
-        let mut bytes = header.to_vec();
+    /// A legacy transaction with `num_signatures` zeroed signatures, `header`,
+    /// `num_accounts` distinct keys, and a zero blockhash; instructions are appended by callers.
+    fn legacy_tx_prefix(num_signatures: u8, header: [u8; 3], num_accounts: u8) -> Vec<u8> {
+        let mut bytes = vec![num_signatures];
+        bytes.extend(std::iter::repeat_n(0u8, 64 * num_signatures as usize));
+        bytes.extend_from_slice(&header);
         bytes.push(num_accounts);
-        bytes.extend(std::iter::repeat_n(0u8, 32 * num_accounts as usize));
+        for i in 0..num_accounts {
+            bytes.extend_from_slice(&[i + 1; 32]);
+        }
         bytes.extend_from_slice(&[0u8; 32]);
         bytes
     }
 
-    #[test]
-    fn decode_legacy_message_rejects_huge_instruction_count() {
-        let mut bytes = legacy_message_prefix([1, 0, 0], 1);
-        bytes.extend_from_slice(&crate::encode_length_to_compact_u16_bytes(60_000).unwrap());
-
-        let result = manual_decode::decode_legacy_message(&bytes, Vec::new());
+    fn assert_rejected(bytes: &[u8], reason: &str) {
         assert!(
-            result.is_err(),
-            "huge instruction count exceeding remaining bytes must be rejected"
-        );
-
-        // Also rejected end-to-end (prefixed with an empty signature count).
-        let mut tx_bytes = vec![0u8];
-        tx_bytes.extend_from_slice(&bytes);
-        assert!(VersionedTransaction::deserialize_with_version(&tx_bytes).is_err());
-    }
-
-    #[test]
-    fn decode_legacy_message_rejects_inconsistent_header() {
-        // num_readonly_unsigned_accounts = 5, but only 1 account key is present.
-        let mut bytes = legacy_message_prefix([1, 0, 5], 1);
-        bytes.push(0); // instruction count = 0
-
-        let result = manual_decode::decode_legacy_message(&bytes, Vec::new());
-        assert!(
-            result.is_err(),
-            "header counts inconsistent with account_keys length must be rejected at parse time"
+            VersionedTransaction::deserialize_with_version(bytes).is_err(),
+            "{reason}"
         );
     }
 
     #[test]
-    fn decode_legacy_message_rejects_readonly_unsigned_exceeding_unsigned_section() {
-        // 1 required signature + 2 keys leaves only 1 unsigned account, but this claims 2.
-        let mut bytes = legacy_message_prefix([1, 0, 2], 2);
-        bytes.push(0); // instruction count = 0
+    fn deserialize_accepts_minimal_transactions() {
+        // 1 signer, program at index 1, one instruction touching the payer.
+        let mut legacy = legacy_tx_prefix(1, [1, 0, 1], 2);
+        legacy.extend_from_slice(&[1, 1, 1, 0, 0]);
+        assert!(VersionedTransaction::deserialize_with_version(&legacy).is_ok());
 
-        let result = manual_decode::decode_legacy_message(&bytes, Vec::new());
-        assert!(
-            result.is_err(),
-            "num_readonly_unsigned_accounts exceeding the unsigned section must be rejected"
-        );
+        let mut v0 = legacy_tx_prefix(1, [1, 0, 1], 2);
+        v0.insert(65, 0x80);
+        v0.extend_from_slice(&[1, 1, 1, 0, 0]);
+        v0.push(0); // address table lookup count
+        assert!(VersionedTransaction::deserialize_with_version(&v0).is_ok());
     }
 
     #[test]
-    fn decode_legacy_message_rejects_readonly_signed_exceeding_required_signatures() {
-        // num_readonly_signed_accounts (2) exceeds num_required_signatures (1).
-        let mut bytes = legacy_message_prefix([1, 2, 0], 2);
-        bytes.push(0); // instruction count = 0
-
-        let result = manual_decode::decode_legacy_message(&bytes, Vec::new());
-        assert!(
-            result.is_err(),
-            "num_readonly_signed_accounts exceeding num_required_signatures must be rejected"
-        );
+    fn deserialize_rejects_truncation_and_trailing_bytes() {
+        for fixture in [LEGACY_TX, MAYAN_V0_TX] {
+            let data = STANDARD.decode(fixture).unwrap();
+            for len in 0..data.len() {
+                assert_rejected(&data[..len], &format!("truncated to {len} bytes"));
+            }
+            let mut padded = data.clone();
+            padded.push(0);
+            assert_rejected(&padded, "trailing byte");
+        }
     }
 
     #[test]
-    fn decode_v0_message_rejects_readonly_unsigned_exceeding_unsigned_section() {
-        // Same malformed shape as the legacy case, but through the V0 decoder.
-        let mut bytes = legacy_message_prefix([1, 0, 2], 2);
-        bytes.push(0); // instruction count = 0
-        bytes.push(0); // address table lookup count = 0
+    fn deserialize_requires_v0_lookup_count() {
+        let data = STANDARD.decode(MAYAN_V0_TX).unwrap();
+        let mut tx = VersionedTransaction::deserialize_with_version(&data).unwrap();
+        if let VersionedTransaction::V0 { message, .. } = &mut tx {
+            message.address_table_lookups.clear();
+        }
+        let mut bytes = tx.serialize().unwrap();
+        assert_eq!(bytes.pop(), Some(0));
+        assert_rejected(&bytes, "missing address table lookup count");
+    }
 
-        let result = manual_decode::decode_v0_message(&bytes, Vec::new());
+    #[test]
+    fn deserialize_rejects_unknown_discriminators() {
+        let mut v0 = legacy_tx_prefix(1, [1, 0, 1], 2);
+        v0.extend_from_slice(&[1, 1, 1, 0, 0, 0]);
+        // A v0 message without the signature envelope, and the off-chain message prefix.
+        for first in [0x80, 0x81, 0xff] {
+            let mut bytes = v0[65..].to_vec();
+            bytes.insert(0, first);
+            assert_rejected(&bytes, &format!("discriminator {first:#04x}"));
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_non_canonical_lengths() {
+        // Account count 2 encoded as the alias [0x82, 0x00].
+        let mut bytes = legacy_tx_prefix(1, [1, 0, 1], 2);
+        bytes.splice(68..69, [0x82, 0x00]);
+        bytes.extend_from_slice(&[1, 1, 1, 0, 0]);
+        assert_rejected(&bytes, "non-canonical account count");
+    }
+
+    #[test]
+    fn deserialize_rejects_unsanitary_messages() {
+        let cases: [([u8; 3], u8, &[u8], &str); 8] = [
+            (
+                [1, 0, 5],
+                2,
+                &[1, 1, 1, 0, 0],
+                "readonly unsigned exceeds keys",
+            ),
+            (
+                [1, 0, 2],
+                2,
+                &[1, 1, 1, 0, 0],
+                "signers + readonly unsigned exceed keys",
+            ),
+            ([1, 1, 1], 2, &[1, 1, 1, 0, 0], "no writable fee payer"),
+            (
+                [1, 2, 0],
+                2,
+                &[1, 1, 1, 0, 0],
+                "readonly signed exceeds signers",
+            ),
+            ([0, 0, 1], 2, &[1, 1, 1, 0, 0], "no signers"),
+            ([1, 0, 1], 2, &[1, 0, 1, 0, 0], "fee payer as program"),
+            ([1, 0, 1], 2, &[1, 2, 1, 0, 0], "program index out of range"),
+            ([1, 0, 1], 2, &[1, 1, 1, 2, 0], "account index out of range"),
+        ];
+        for (header, num_accounts, instruction, reason) in cases {
+            let num_signatures = header[0];
+            let mut bytes = legacy_tx_prefix(num_signatures, header, num_accounts);
+            bytes.extend_from_slice(instruction);
+            assert_rejected(&bytes, reason);
+        }
+
+        let mut too_many_signatures = legacy_tx_prefix(2, [1, 0, 1], 2);
+        too_many_signatures.extend_from_slice(&[1, 1, 1, 0, 0]);
+        assert_rejected(&too_many_signatures, "signature count mismatch");
+
+        let mut huge_instruction_count = legacy_tx_prefix(1, [1, 0, 1], 2);
+        huge_instruction_count
+            .extend_from_slice(&crate::encode_length_to_compact_u16_bytes(60_000).unwrap());
+        assert_rejected(&huge_instruction_count, "instruction count exceeds input");
+    }
+
+    #[test]
+    fn deserialize_rejects_unsanitary_v0_lookups() {
+        let v0_tx = |instruction: &[u8], lookups: &[u8]| {
+            let mut bytes = legacy_tx_prefix(1, [1, 0, 1], 2);
+            bytes.insert(65, 0x80);
+            bytes.extend_from_slice(instruction);
+            bytes.extend_from_slice(lookups);
+            bytes
+        };
+        let mut empty_lookup = vec![1];
+        empty_lookup.extend_from_slice(&[9; 32]);
+        empty_lookup.extend_from_slice(&[0, 0]);
+        assert_rejected(
+            &v0_tx(&[1, 1, 1, 0, 0], &empty_lookup),
+            "lookup without indexes",
+        );
+
+        let mut one_lookup = vec![1];
+        one_lookup.extend_from_slice(&[9; 32]);
+        one_lookup.extend_from_slice(&[1, 0, 0]);
+        // Index 2 is the looked-up account; programs may not be loaded from tables.
         assert!(
-            result.is_err(),
-            "num_readonly_unsigned_accounts exceeding the unsigned section must be rejected in V0 too"
+            VersionedTransaction::deserialize_with_version(&v0_tx(&[1, 1, 1, 2, 0], &one_lookup))
+                .is_ok()
+        );
+        assert_rejected(
+            &v0_tx(&[1, 2, 1, 0, 0], &one_lookup),
+            "program loaded from lookup table",
+        );
+        assert_rejected(
+            &v0_tx(&[1, 1, 1, 3, 0], &one_lookup),
+            "account index beyond loaded keys",
         );
     }
 

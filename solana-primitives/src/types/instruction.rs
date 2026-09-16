@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 /// Represents a Solana instruction
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct Instruction {
     /// The program ID that will process this instruction
     #[serde(alias = "programId")]
@@ -16,7 +16,9 @@ pub struct Instruction {
 }
 
 /// Metadata about an account in an instruction
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
+)]
 pub struct AccountMeta {
     /// The account's public key
     #[serde(alias = "publicKey")]
@@ -61,7 +63,7 @@ impl AccountMeta {
 }
 
 /// A compiled instruction that references accounts by their indices
-#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct CompiledInstruction {
     /// Index into the account keys array indicating the program to execute
     pub program_id_index: u8,

@@ -3,350 +3,256 @@ use crate::types::Pubkey;
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest, Sha256};
 
-/// Maximum number of seeds allowed in a PDA
+/// Maximum number of seeds allowed in a PDA, including the bump seed.
 pub const MAX_SEEDS: usize = 16;
 /// Maximum length of a seed in bytes
 pub const MAX_SEED_LEN: usize = 32;
+/// Domain separator appended to PDA preimages.
+const PDA_MARKER: &[u8; 21] = b"ProgramDerivedAddress";
 
-/// Find a program address and bump seed for the given seeds
+/// Find a program address and bump seed for the given seeds.
+///
+/// Tries bump seeds from 255 down to 1 and returns the first address that is
+/// off the Ed25519 curve, matching `Pubkey::find_program_address`. Bump 0 is
+/// never searched, so a program that wants it must call
+/// [`create_program_address`] directly.
 pub fn find_program_address(program_id: &Pubkey, seeds: &[&[u8]]) -> Result<(Pubkey, u8)> {
-    // The bump seed occupies one of the MAX_SEEDS slots.
-    if seeds.len() >= MAX_SEEDS {
-        return Err(SolanaError::InvalidPubkey(format!(
-            "too many seeds: {}, max: {}",
-            seeds.len(),
-            MAX_SEEDS
-        )));
-    }
-    for seed in seeds {
-        if seed.len() > MAX_SEED_LEN {
-            return Err(SolanaError::InvalidPubkey(format!(
-                "seed too long: {}, max: {}",
-                seed.len(),
-                MAX_SEED_LEN
-            )));
+    validate_seeds(seeds)?;
+    for bump in (1..=u8::MAX).rev() {
+        if let Some(address) = derive_program_address(program_id, seeds, bump) {
+            return Ok((address, bump));
         }
     }
-
-    // Try each bump seed until we find a valid PDA
-    let mut bump = 255;
-    loop {
-        let mut hasher = Sha256::new();
-
-        // Hash all seeds
-        for seed in seeds {
-            hasher.update(seed);
-        }
-
-        // Add bump seed
-        hasher.update([bump]);
-
-        // Add program ID
-        hasher.update(program_id.as_bytes());
-
-        // Add "ProgramDerivedAddress" as a domain separator
-        hasher.update(b"ProgramDerivedAddress");
-
-        // Get the hash result
-        let hash = hasher.finalize();
-
-        // Convert hash to pubkey
-        let mut pubkey_bytes = [0u8; 32];
-        pubkey_bytes.copy_from_slice(&hash[..32]);
-
-        // Check if it's on curve
-        if !is_on_curve(&pubkey_bytes) {
-            // Found a valid PDA
-            return Ok((Pubkey::new(pubkey_bytes), bump));
-        }
-
-        if bump == 0 {
-            return Err(SolanaError::InvalidPubkey(
-                "unable to find valid PDA, all bump seeds exhausted".to_string(),
-            ));
-        }
-        bump -= 1;
-    }
+    Err(SolanaError::InvalidPubkey(
+        "unable to find a viable program address bump seed".to_string(),
+    ))
 }
 
-/// Create a program address from seeds and a bump seed
+/// Create a program address from seeds and a bump seed.
+///
+/// Fails if the derived address is on the Ed25519 curve.
 pub fn create_program_address(
     program_id: &Pubkey,
     seeds: &[&[u8]],
     bump_seed: u8,
 ) -> Result<Pubkey> {
-    // The bump seed occupies one of the MAX_SEEDS slots.
+    validate_seeds(seeds)?;
+    derive_program_address(program_id, seeds, bump_seed).ok_or_else(|| {
+        SolanaError::InvalidPubkey("resulting address is on curve (invalid PDA)".to_string())
+    })
+}
+
+/// Derive an account address from a base pubkey, a seed string, and an owner,
+/// matching `Pubkey::create_with_seed`.
+pub fn create_with_seed(base: &Pubkey, seed: &str, owner: &Pubkey) -> Result<Pubkey> {
+    if seed.len() > MAX_SEED_LEN {
+        return Err(SolanaError::InvalidPubkey(format!(
+            "seed too long: {}, max: {MAX_SEED_LEN}",
+            seed.len()
+        )));
+    }
+    if owner.as_bytes().ends_with(PDA_MARKER) {
+        return Err(SolanaError::InvalidPubkey(
+            "owner cannot end with the program derived address marker".to_string(),
+        ));
+    }
+    let hash = Sha256::new()
+        .chain_update(base.as_bytes())
+        .chain_update(seed.as_bytes())
+        .chain_update(owner.as_bytes())
+        .finalize();
+    Ok(Pubkey::new(hash.into()))
+}
+
+/// Seeds exclude the bump, which takes one of the [`MAX_SEEDS`] slots.
+fn validate_seeds(seeds: &[&[u8]]) -> Result<()> {
     if seeds.len() >= MAX_SEEDS {
         return Err(SolanaError::InvalidPubkey(format!(
             "too many seeds: {}, max: {}",
             seeds.len(),
-            MAX_SEEDS
+            MAX_SEEDS - 1
         )));
     }
-    for seed in seeds {
-        if seed.len() > MAX_SEED_LEN {
-            return Err(SolanaError::InvalidPubkey(format!(
-                "seed too long: {}, max: {}",
-                seed.len(),
-                MAX_SEED_LEN
-            )));
-        }
+    if let Some(seed) = seeds.iter().find(|seed| seed.len() > MAX_SEED_LEN) {
+        return Err(SolanaError::InvalidPubkey(format!(
+            "seed too long: {}, max: {MAX_SEED_LEN}",
+            seed.len()
+        )));
     }
+    Ok(())
+}
 
+/// `sha256(seeds || bump || program_id || PDA_MARKER)`, or `None` if it is on the curve.
+fn derive_program_address(program_id: &Pubkey, seeds: &[&[u8]], bump: u8) -> Option<Pubkey> {
     let mut hasher = Sha256::new();
-
-    // Hash all seeds
     for seed in seeds {
         hasher.update(seed);
     }
-
-    // Add bump seed
-    hasher.update([bump_seed]);
-
-    // Add program ID
-    hasher.update(program_id.as_bytes());
-
-    // Add "ProgramDerivedAddress" as a domain separator
-    hasher.update(b"ProgramDerivedAddress");
-
-    // Get the hash result
-    let hash = hasher.finalize();
-
-    // Convert hash to pubkey
-    let mut pubkey_bytes = [0u8; 32];
-    pubkey_bytes.copy_from_slice(&hash[..32]);
-
-    // Check if it's on curve
-    if is_on_curve(&pubkey_bytes) {
-        return Err(SolanaError::InvalidPubkey(
-            "resulting address is on curve (invalid PDA)".to_string(),
-        ));
-    }
-
-    Ok(Pubkey::new(pubkey_bytes))
+    let hash: [u8; 32] = hasher
+        .chain_update([bump])
+        .chain_update(program_id.as_bytes())
+        .chain_update(PDA_MARKER)
+        .finalize()
+        .into();
+    (!is_on_curve(&hash)).then(|| Pubkey::new(hash))
 }
 
-/// Check if a public key is on the ed25519 curve
-pub fn is_on_curve(bytes: &[u8; 32]) -> bool {
-    // Check if the point is all zeros
-    if bytes.iter().all(|&b| b == 0) {
-        return false;
-    }
-    // Try to decompress the point
+/// Whether `bytes` decompress to an Ed25519 point, matching Solana's `bytes_are_curve_point`.
+pub(crate) fn is_on_curve(bytes: &[u8; 32]) -> bool {
     VerifyingKey::from_bytes(bytes).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
+    use crate::instructions::program_ids::system_program;
+    use crate::test_utils::{key, pubkey};
+    use hexlit::hex;
 
-    fn create_test_program_id() -> Pubkey {
-        crate::instructions::program_ids::system_program()
+    // Vectors from `solana-address` 2.7 (`curve25519` feature). `key(..)` is `sha256(label)`.
+    const PDA_PROGRAM: &str = "HimW7bKhxSK4Ti3zkGZC94CLoRYrAb9rkgneaETAqFHW";
+
+    fn find(seeds: &[&[u8]]) -> (String, u8) {
+        let (address, bump) = find_program_address(&key("pda_program"), seeds).unwrap();
+        (address.to_base58(), bump)
     }
 
     #[test]
-    fn test_find_program_address() {
-        let program_id = create_test_program_id();
-        let seed = b"test_seed";
-        let seeds = [seed.as_ref()];
+    fn find_program_address_matches_upstream() {
+        assert_eq!(key("pda_program").to_base58(), PDA_PROGRAM);
+        let long = [7u8; 32];
+        let fifteen: Vec<[u8; 1]> = (0..15u8).map(|i| [i]).collect();
+        let fifteen: Vec<&[u8]> = fifteen.iter().map(|s| &s[..]).collect();
 
-        let (pda, bump) = find_program_address(&program_id, &seeds).unwrap();
+        let cases: [(&[&[u8]], &str, u8); 5] = [
+            (&[], "AGmwQqVG4pDGQR4rkuZu3xeTGN9fFtTp9C95LbUZwnxa", 255),
+            (&[b"a"], "FNGma17diVJNi2hk8rqL9EXZfubEzLze3EMmRsRd2qZz", 254),
+            (&[&long], "7zfPGCTgMLLm8rvX5ciZtMo24ADErj5byx5yy4WG74y", 255),
+            (
+                &[b"vault", &long, b""],
+                "CbxsgYHyHP4pnjK53oVxah6byhkyhE78z5zs2oGeP9o7",
+                255,
+            ),
+            (
+                &fifteen,
+                "C28icY5egSkHEvhwZpietpuMax1wnZKSfPmeK1Ruzka1",
+                255,
+            ),
+        ];
+        for (seeds, address, bump) in cases {
+            assert_eq!(find(seeds), (address.to_string(), bump));
+            assert_eq!(
+                create_program_address(&key("pda_program"), seeds, bump).unwrap(),
+                pubkey(address)
+            );
+        }
 
-        // Verify the PDA is off curve
-        assert!(!is_on_curve(pda.as_bytes()));
-
-        // Verify we can recreate the PDA with the bump
-        let recreated_pda = create_program_address(&program_id, &seeds, bump).unwrap();
-        assert_eq!(pda, recreated_pda);
+        let (address, bump) = find_program_address(&system_program(), &[b"helloWorld"]).unwrap();
+        assert_eq!(
+            (address, bump),
+            (pubkey("46GZzzetjCURsdFPb7rcnspbEMnCBXe9kpjrsZAkKb6X"), 254)
+        );
     }
 
     #[test]
-    fn test_find_program_address_multiple_seeds() {
-        let program_id = create_test_program_id();
-        let seed1 = b"seed1";
-        let seed2 = b"seed2";
-        let seed3 = b"seed3";
-        let seeds = [seed1.as_ref(), seed2.as_ref(), seed3.as_ref()];
-
-        let (pda, bump) = find_program_address(&program_id, &seeds).unwrap();
-
-        // Verify the PDA is off curve
-        assert!(!is_on_curve(pda.as_bytes()));
-
-        // Verify we can recreate the PDA with the bump
-        let recreated_pda = create_program_address(&program_id, &seeds, bump).unwrap();
-        assert_eq!(pda, recreated_pda);
+    fn create_program_address_rejects_on_curve_result() {
+        // Upstream `create_program_address([00000000, ff], program)` returns `InvalidSeeds`.
+        let seed = [0u8; 4];
+        assert!(create_program_address(&key("pda_program"), &[&seed], 255).is_err());
+        let (_, bump) = find_program_address(&key("pda_program"), &[&seed]).unwrap();
+        assert!(bump < 255);
     }
 
     #[test]
-    fn test_find_program_address_too_many_seeds() {
-        let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS + 1).map(|i| format!("seed{i}")).collect();
-        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
+    fn seed_limits() {
+        let program_id = key("pda_program");
+        let seeds: Vec<[u8; 1]> = (0..MAX_SEEDS as u8).map(|i| [i]).collect();
+        let seeds: Vec<&[u8]> = seeds.iter().map(|s| &s[..]).collect();
 
-        let result = find_program_address(&program_id, &seed_refs);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
+        // The bump occupies the last slot, so callers get MAX_SEEDS - 1.
+        assert!(find_program_address(&program_id, &seeds).is_err());
+        assert!(create_program_address(&program_id, &seeds, 0).is_err());
+        assert!(find_program_address(&program_id, &seeds[1..]).is_ok());
+
+        let too_long = [0u8; MAX_SEED_LEN + 1];
+        assert!(find_program_address(&program_id, &[&too_long]).is_err());
+        assert!(create_program_address(&program_id, &[&too_long], 0).is_err());
     }
 
     #[test]
-    fn test_find_program_address_max_seeds_rejected() {
-        let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS).map(|i| format!("seed{i}")).collect();
-        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
-
-        let result = find_program_address(&program_id, &seed_refs);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
-    }
-
-    #[test]
-    fn test_find_program_address_max_seeds_minus_one_succeeds() {
-        let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS - 1).map(|i| format!("seed{i}")).collect();
-        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
-
-        let (pda, bump) = find_program_address(&program_id, &seed_refs).unwrap();
-        assert!(!is_on_curve(pda.as_bytes()));
-
-        let recreated_pda = create_program_address(&program_id, &seed_refs, bump).unwrap();
-        assert_eq!(pda, recreated_pda);
-    }
-
-    #[test]
-    fn test_find_program_address_seed_too_long() {
-        let program_id = create_test_program_id();
-        let seed = [0u8; MAX_SEED_LEN + 1];
-        let seeds = [&seed[..]];
-
-        let result = find_program_address(&program_id, &seeds);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
-    }
-
-    #[test]
-    fn test_create_program_address() {
-        let program_id = create_test_program_id();
-        let seed = b"test_seed";
-        let seeds = [seed.as_ref()];
-        let bump = 255;
-
-        let pda = create_program_address(&program_id, &seeds, bump).unwrap();
-
-        // Verify the PDA is off curve
-        assert!(!is_on_curve(pda.as_bytes()));
-    }
-
-    #[test]
-    fn test_create_program_address_max_seeds_rejected() {
-        let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS).map(|i| format!("seed{i}")).collect();
-        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
-
-        let result = create_program_address(&program_id, &seed_refs, 255);
-        assert!(matches!(result, Err(SolanaError::InvalidPubkey(_))));
-    }
-
-    #[test]
-    fn test_create_program_address_max_seeds_minus_one_succeeds() {
-        let program_id = create_test_program_id();
-        let seed_strings: Vec<String> = (0..MAX_SEEDS - 1).map(|i| format!("seed{i}")).collect();
-        let seed_refs: Vec<&[u8]> = seed_strings.iter().map(|s| s.as_bytes()).collect();
-
-        let (_, bump) = find_program_address(&program_id, &seed_refs).unwrap();
-        let pda = create_program_address(&program_id, &seed_refs, bump).unwrap();
-        assert!(!is_on_curve(pda.as_bytes()));
-    }
-
-    #[test]
-    fn test_create_program_address_on_curve() {
-        let program_id = create_test_program_id();
-        // Try different seeds and bumps to verify we never get a point on the curve
-        for i in 0..10 {
-            let seed = format!("test_seed_{i}");
-            let seeds = [seed.as_bytes()];
-            for bump in 0..10 {
-                if let Ok(pubkey) = create_program_address(&program_id, &seeds, bump) {
-                    assert!(
-                        !is_on_curve(pubkey.as_bytes()),
-                        "Found point on curve with seed {i} and bump {bump}"
-                    );
-                }
-            }
+    fn is_on_curve_matches_upstream_bytes_are_curve_point() {
+        let cases: [([u8; 32], bool); 15] = [
+            // All-zero bytes decompress (y = 0) and are therefore on the curve.
+            ([0; 32], true),
+            ([1; 32], true),
+            ([0xff; 32], true),
+            (
+                hex!("5866666666666666666666666666666666666666666666666666666666666666"),
+                true,
+            ),
+            // Non-canonical y encodings are reduced mod p before decompression.
+            (
+                hex!("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+                true,
+            ),
+            (
+                hex!("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+                true,
+            ),
+            (
+                hex!("0000000000000000000000000000000000000000000000000000000000000080"),
+                true,
+            ),
+            (
+                hex!("df299516b500f8bd486b00b46686c8c5229a94539ffff63664c0890934d1ef4f"),
+                false,
+            ),
+            (
+                hex!("1676e820cd6100968f689719f2af91083c36612aa3ad411cbfbdc30dc489ac2f"),
+                false,
+            ),
+            (
+                hex!("7b90b08d7676d79df0ce8c4768991529b25d908dde3b6b99f2ef900163e935a8"),
+                false,
+            ),
+            (
+                hex!("e2e7256451e07e1205f11ca96ef1c61b56e9c9eaa5ecb24d98c44bff08b5b5a5"),
+                true,
+            ),
+            (
+                hex!("f6866ca10994a5c324e8cdaf99a389f4a83883022861c615063248822d7ea7e8"),
+                true,
+            ),
+            (
+                hex!("4bf7fe7a76a5a9a514bffb0f92eeb3f2ddd8bd19f7ad4a3764b2c97f6ea5d4a4"),
+                true,
+            ),
+            (
+                hex!("785e43a85294d8ce1d8c1ffc7434c24e0d02613b7371030e4065b2b3ae481b61"),
+                false,
+            ),
+            (
+                hex!("c3b721b14c56a235bde44cbf1cac02cd3983c911538af7a3523bab1d3aa33fe7"),
+                false,
+            ),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(is_on_curve(&bytes), expected, "{bytes:02x?}");
         }
     }
 
     #[test]
-    fn test_is_on_curve() {
-        // Test a valid ed25519 public key (base point)
-        let valid_key = [
-            0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-            0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
-            0x66, 0x66, 0x66, 0x66,
-        ];
-        assert!(is_on_curve(&valid_key));
-
-        // Test an invalid public key (all zeros)
-        let invalid_key = [0u8; 32];
-        assert!(!is_on_curve(&invalid_key));
-    }
-
-    #[test]
-    fn test_pda_deterministic() {
-        let program_id = create_test_program_id();
-        let seed = b"test_seed";
-        let seeds = [seed.as_ref()];
-
-        // Generate PDA twice with same inputs
-        let (pda1, bump1) = find_program_address(&program_id, &seeds).unwrap();
-        let (pda2, bump2) = find_program_address(&program_id, &seeds).unwrap();
-
-        // Verify results are identical
-        assert_eq!(pda1, pda2);
-        assert_eq!(bump1, bump2);
-    }
-
-    #[test]
-    fn test_pda_different_program_ids() {
-        let program_id1 = create_test_program_id();
-        let program_id2 = Pubkey::new([
-            1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4,
-            4, 4, 4,
-        ]);
-        let seed = b"test_seed";
-        let seeds = [seed.as_ref()];
-
-        let (pda1, _bump1) = find_program_address(&program_id1, &seeds).unwrap();
-        let (pda2, _bump2) = find_program_address(&program_id2, &seeds).unwrap();
-
-        // Verify PDAs are different
-        assert_ne!(pda1, pda2);
-        // Both PDAs should be off curve
-        assert!(!is_on_curve(pda1.as_bytes()));
-        assert!(!is_on_curve(pda2.as_bytes()));
-    }
-
-    #[test]
-    fn test_pda_matches_js_example() {
-        let program_id = crate::instructions::program_ids::system_program();
-        let string = b"helloWorld";
-        let seeds = [string.as_ref()];
-
-        let (pda, bump) = find_program_address(&program_id, &seeds).unwrap();
-
-        // Expected values from JS example:
-        // PDA: 46GZzzetjCURsdFPb7rcnspbEMnCBXe9kpjrsZAkKb6X
-        // Bump: 254
-        let expected_pda =
-            Pubkey::from_str("46GZzzetjCURsdFPb7rcnspbEMnCBXe9kpjrsZAkKb6X").unwrap();
-        let expected_bump = 254;
-
-        assert_eq!(pda, expected_pda, "PDA does not match expected value");
+    fn create_with_seed_rules() {
+        let (base, owner) = (key("base"), key("owner"));
         assert_eq!(
-            bump, expected_bump,
-            "Bump seed does not match expected value"
+            create_with_seed(&base, "seed", &owner).unwrap(),
+            pubkey("3CzqgepHiVmdbc3owKnm2SiTGX4wpiawznXCN3jsP2jp")
         );
 
-        // Verify we can recreate the PDA with the bump
-        let recreated_pda = create_program_address(&program_id, &seeds, bump).unwrap();
-        assert_eq!(recreated_pda, expected_pda);
+        assert!(create_with_seed(&base, &"x".repeat(MAX_SEED_LEN + 1), &owner).is_err());
+
+        let mut marked = [0u8; 32];
+        marked[32 - PDA_MARKER.len()..].copy_from_slice(PDA_MARKER);
+        assert!(create_with_seed(&base, "seed", &Pubkey::new(marked)).is_err());
     }
 }

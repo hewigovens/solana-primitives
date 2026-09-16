@@ -34,6 +34,9 @@ pub mod program_ids {
     /// Rent sysvar ID
     pub const SYSVAR_RENT_ID: &str = "SysvarRent111111111111111111111111111111111";
 
+    /// Recent blockhashes sysvar ID (still required by the nonce instructions)
+    pub const SYSVAR_RECENT_BLOCKHASHES_ID: &str = "SysvarRecentB1ockHashes11111111111111111111";
+
     /// Helper function to get System program Pubkey
     pub fn system_program() -> Pubkey {
         Pubkey::from_base58(SYSTEM_PROGRAM_ID).unwrap()
@@ -72,5 +75,10 @@ pub mod program_ids {
     /// Helper function to get Rent sysvar Pubkey
     pub fn rent_sysvar() -> Pubkey {
         Pubkey::from_base58(SYSVAR_RENT_ID).unwrap()
+    }
+
+    /// Helper function to get Recent blockhashes sysvar Pubkey
+    pub fn recent_blockhashes_sysvar() -> Pubkey {
+        Pubkey::from_base58(SYSVAR_RECENT_BLOCKHASHES_ID).unwrap()
     }
 }
