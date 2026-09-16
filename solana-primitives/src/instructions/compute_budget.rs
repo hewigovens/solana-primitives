@@ -122,38 +122,87 @@ pub fn parse_compute_unit_price_data(data: &[u8]) -> Option<u64> {
     }
 }
 
-/// The Compute Budget instructions in a list, in order.
+/// Heap requests must be a multiple of 1024 within this range.
+const HEAP_FRAME_BYTES: std::ops::RangeInclusive<u32> = 32 * 1024..=256 * 1024;
+
+/// Parse Compute Budget instruction data the way the runtime does, keeping each
+/// instruction's position.
+///
+/// Returns `None` when the runtime would fail the transaction: an instruction
+/// that doesn't parse, a request kind that appears twice, or an invalid heap size.
+pub(crate) fn parse_compute_budget_requests<'a>(
+    instructions: impl IntoIterator<Item = (usize, &'a [u8])>,
+) -> Option<Vec<(usize, ComputeBudgetInstruction)>> {
+    let mut requests: Vec<(usize, ComputeBudgetInstruction)> = Vec::new();
+    for (index, data) in instructions {
+        let request = ComputeBudgetInstruction::parse(data)?;
+        if let ComputeBudgetInstruction::RequestHeapFrame(bytes) = request
+            && (!bytes.is_multiple_of(1024) || !HEAP_FRAME_BYTES.contains(&bytes))
+        {
+            return None;
+        }
+        if requests
+            .iter()
+            .any(|(_, seen)| seen.discriminant() == request.discriminant())
+        {
+            return None;
+        }
+        requests.push((index, request));
+    }
+    Some(requests)
+}
+
+/// The Compute Budget requests in a list, in order.
+///
+/// Returns `None` when the runtime would fail the transaction: a Compute Budget
+/// instruction that doesn't parse, a request kind that appears twice, or an
+/// invalid heap size.
 pub fn compute_budget_instructions(
     instructions: &[Instruction],
-) -> impl Iterator<Item = ComputeBudgetInstruction> + '_ {
+) -> Option<Vec<ComputeBudgetInstruction>> {
     let program_id = compute_budget_program();
-    instructions
+    let requests = instructions
         .iter()
-        .filter(move |instruction| instruction.program_id == program_id)
-        .filter_map(|instruction| ComputeBudgetInstruction::parse(&instruction.data))
+        .enumerate()
+        .filter(|(_, instruction)| instruction.program_id == program_id)
+        .map(|(index, instruction)| (index, instruction.data.as_slice()));
+    parse_compute_budget_requests(requests)
+        .map(|requests| requests.into_iter().map(|(_, request)| request).collect())
 }
 
-/// Get the first compute unit limit present in a list of instructions.
+/// The compute unit limit the runtime would apply, if one is requested.
 pub fn get_compute_unit_limit(instructions: &[Instruction]) -> Option<u32> {
-    compute_budget_instructions(instructions).find_map(|instruction| match instruction {
-        ComputeBudgetInstruction::SetComputeUnitLimit(units) => Some(units),
-        _ => None,
-    })
+    compute_budget_instructions(instructions)?
+        .into_iter()
+        .find_map(|instruction| match instruction {
+            ComputeBudgetInstruction::SetComputeUnitLimit(units) => Some(units),
+            _ => None,
+        })
 }
 
-/// Get the first compute unit price present in a list of instructions.
+/// The compute unit price the runtime would apply, if one is requested.
 pub fn get_compute_unit_price(instructions: &[Instruction]) -> Option<u64> {
-    compute_budget_instructions(instructions).find_map(|instruction| match instruction {
-        ComputeBudgetInstruction::SetComputeUnitPrice(micro_lamports) => Some(micro_lamports),
-        _ => None,
-    })
+    compute_budget_instructions(instructions)?
+        .into_iter()
+        .find_map(|instruction| match instruction {
+            ComputeBudgetInstruction::SetComputeUnitPrice(micro_lamports) => Some(micro_lamports),
+            _ => None,
+        })
 }
 
-/// Ensure a compute unit price instruction exists at the beginning of the instruction list.
-/// Returns true when the instruction was inserted and false when it already existed.
+/// Insert a compute unit price instruction at the start of the list (after a
+/// leading `AdvanceNonceAccount`) unless the list already has one.
+///
+/// Returns whether an instruction was inserted. Nothing is inserted when the
+/// existing Compute Budget instructions are invalid (see
+/// [`compute_budget_instructions`]).
 pub fn ensure_compute_unit_price(instructions: &mut Vec<Instruction>, micro_lamports: u64) -> bool {
-    if get_compute_unit_price(instructions).is_some() {
-        return false;
+    match compute_budget_instructions(instructions) {
+        Some(requests)
+            if !requests.iter().any(|request| {
+                matches!(request, ComputeBudgetInstruction::SetComputeUnitPrice(_))
+            }) => {}
+        _ => return false,
     }
 
     // Durable-nonce txs require AdvanceNonceAccount as instruction 0; insert after it.
@@ -204,15 +253,14 @@ mod tests {
 
     #[test]
     fn parse_follows_the_runtime() {
-        use ComputeBudgetInstruction::*;
         assert_eq!(
             ComputeBudgetInstruction::parse(&hex!("02c05c1500")),
-            Some(SetComputeUnitLimit(1_400_000))
+            Some(ComputeBudgetInstruction::SetComputeUnitLimit(1_400_000))
         );
         // Trailing bytes are ignored, as Borsh `try_from_slice_unchecked` does.
         assert_eq!(
             ComputeBudgetInstruction::parse(&hex!("02c05c1500ff")),
-            Some(SetComputeUnitLimit(1_400_000))
+            Some(ComputeBudgetInstruction::SetComputeUnitLimit(1_400_000))
         );
         for data in [
             &[][..],
@@ -227,17 +275,13 @@ mod tests {
     }
 
     #[test]
-    fn getters_return_first_match() {
+    fn getters() {
         let payer = key("payer");
         let mut instructions = vec![transfer(&payer, &key("recipient"), 10)];
         assert_eq!(get_compute_unit_limit(&instructions), None);
         assert_eq!(get_compute_unit_price(&instructions), None);
 
-        instructions.extend([
-            set_compute_unit_limit(250_000),
-            set_compute_unit_price(7),
-            set_compute_unit_limit(1),
-        ]);
+        instructions.extend([set_compute_unit_limit(250_000), set_compute_unit_price(7)]);
         assert_eq!(get_compute_unit_limit(&instructions), Some(250_000));
         assert_eq!(get_compute_unit_price(&instructions), Some(7));
         assert_eq!(
@@ -245,6 +289,42 @@ mod tests {
             Some(250_000)
         );
         assert_eq!(parse_compute_unit_price_data(&instructions[1].data), None);
+    }
+
+    #[test]
+    fn invalid_requests_have_no_values() {
+        let payer = key("payer");
+        let transfer = transfer(&payer, &key("recipient"), 10);
+        let retired = Instruction {
+            data: vec![0],
+            ..set_compute_unit_limit(0)
+        };
+        let invalid_lists = [
+            vec![retired, set_compute_unit_limit(5)],
+            vec![set_compute_unit_limit(5), set_compute_unit_limit(6)],
+            vec![set_compute_unit_limit(5), request_heap_frame(1000)],
+            vec![set_compute_unit_limit(5), request_heap_frame(512 * 1024)],
+        ];
+        for mut instructions in invalid_lists {
+            assert_eq!(compute_budget_instructions(&instructions), None);
+            assert_eq!(get_compute_unit_limit(&instructions), None);
+            let before = instructions.clone();
+            assert!(!ensure_compute_unit_price(&mut instructions, 1));
+            assert_eq!(instructions, before);
+        }
+
+        let valid = vec![
+            transfer,
+            request_heap_frame(64 * 1024),
+            set_compute_unit_limit(5),
+        ];
+        assert_eq!(
+            compute_budget_instructions(&valid),
+            Some(vec![
+                ComputeBudgetInstruction::RequestHeapFrame(64 * 1024),
+                ComputeBudgetInstruction::SetComputeUnitLimit(5),
+            ])
+        );
     }
 
     #[test]

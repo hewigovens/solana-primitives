@@ -5,8 +5,6 @@ use crate::types::{
     AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
 };
 use crate::wire;
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 /// Account indexes are `u8`, so a message can reference at most 256 accounts.
 const MAX_ACCOUNT_KEYS: usize = 256;
@@ -15,19 +13,8 @@ const MAX_ACCOUNT_KEYS: usize = 256;
 ///
 /// Account keys are ordered writable signers (fee payer first), readonly
 /// signers, writable non-signers, then readonly non-signers.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Default,
-    PartialEq,
-    Eq,
-    Hash,
-    BorshSerialize,
-    BorshDeserialize,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageHeader {
     /// The number of signatures required for this message to be considered valid.
     pub num_required_signatures: u8,
@@ -83,9 +70,8 @@ pub(crate) fn sanitize_instructions(
 ///
 /// Its wire encoding is `header || compact-u16 keys || blockhash || compact-u16 instructions`,
 /// which is also the byte string that signers sign.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Message {
     /// The message header, identifying signed and read-only `account_keys`.
     pub header: MessageHeader,
@@ -179,9 +165,8 @@ impl Message {
 /// A v0 message, which can load accounts from address lookup tables.
 ///
 /// Its wire encoding is `0x80 || legacy body || compact-u16 lookups`.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageV0 {
     /// The message header, identifying signed and read-only `account_keys`.
     pub header: MessageHeader,
@@ -268,7 +253,8 @@ impl MessageV0 {
 }
 
 /// A message of any supported version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VersionedMessage {
     /// Legacy message (no version prefix).
     Legacy(Message),
@@ -331,7 +317,9 @@ impl VersionedMessage {
         }
     }
 
-    /// Replace the recent blockhash. Existing signatures become invalid.
+    /// Replace the recent blockhash. Signatures over the old message become invalid;
+    /// [`VersionedTransaction::set_recent_blockhash`](crate::VersionedTransaction::set_recent_blockhash)
+    /// also clears them.
     pub fn set_recent_blockhash(&mut self, recent_blockhash: [u8; 32]) {
         match self {
             Self::Legacy(message) => message.recent_blockhash = recent_blockhash,
@@ -454,7 +442,6 @@ mod tests {
 
     #[test]
     fn legacy_sanitize_rules() {
-        use SanitizeError::*;
         assert_eq!(
             legacy(header(1, 0, 1), 2, vec![instruction(1, &[0])]).sanitize(),
             Ok(())
@@ -464,33 +451,43 @@ mod tests {
                 header(1, 0, 5),
                 2,
                 instruction(1, &[0]),
-                NotEnoughAccountKeys,
+                SanitizeError::NotEnoughAccountKeys,
             ),
             (
                 header(1, 0, 2),
                 2,
                 instruction(1, &[0]),
-                NotEnoughAccountKeys,
+                SanitizeError::NotEnoughAccountKeys,
             ),
-            (header(1, 1, 1), 2, instruction(1, &[0]), NoWritableFeePayer),
-            (header(0, 0, 1), 2, instruction(1, &[0]), NoWritableFeePayer),
+            (
+                header(1, 1, 1),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NoWritableFeePayer,
+            ),
+            (
+                header(0, 0, 1),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NoWritableFeePayer,
+            ),
             (
                 header(1, 0, 1),
                 2,
                 instruction(0, &[0]),
-                InvalidProgramIndex,
+                SanitizeError::InvalidProgramIndex,
             ),
             (
                 header(1, 0, 1),
                 2,
                 instruction(2, &[0]),
-                InvalidProgramIndex,
+                SanitizeError::InvalidProgramIndex,
             ),
             (
                 header(1, 0, 1),
                 2,
                 instruction(1, &[2]),
-                InvalidAccountIndex,
+                SanitizeError::InvalidAccountIndex,
             ),
         ];
         for (header, num_keys, instruction, expected) in cases {

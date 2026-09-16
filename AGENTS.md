@@ -6,10 +6,12 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 
 ### Building and Testing
 - `cargo build` - Build the workspace
-- `cargo test` - Run all tests
+- `cargo test` - Run all tests (default features)
 - `just lint-fix` - Run linter with auto-fixes
 - `just lint` - Run clippy via justfile
-- `just test` - Run tests via justfile
+- `just test` - Run tests with default and all features
+- `just fmt-check` - Check formatting
+- `just doc` - Build rustdoc with warnings denied
 - `just build` - Build via justfile
 
 ### Examples
@@ -20,36 +22,43 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 
 ## Architecture Overview
 
-This crate provides fundamental Solana blockchain primitives for constructing and submitting transactions without requiring the full Solana SDK.
+This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385) without requiring the full Solana SDK. Default dependencies are only `ed25519-dalek`, `bs58`, and `sha2`; `serde` and `borsh` are opt-in features for the Rust data model and are never the wire format.
 
 ### Core Module Structure
 
-- **`types/`** - Core Solana data structures (Pubkey, Transaction, Instruction, Message, etc.)
-- **`builder.rs`** - High-level builders for transactions and instructions (`TransactionBuilder`, `InstructionBuilder`)
-- **`instructions/`** - Pre-built instruction constructors for common Solana programs (System, Token, etc.)
-- **`crypto/`** - Cryptographic utilities and key handling
-- **`borsh_helpers.rs`** - Serialization utilities for Borsh format
-- **`short_vec.rs`** - Compact vector encoding utilities
+- **`types/`** - Data model: `Pubkey`, `SignatureBytes`, `Instruction`/`AccountMeta`/`CompiledInstruction`, `Message` (legacy), `MessageV0`, `VersionedMessage`, `Transaction`, `VersionedTransaction { signatures, message }`, lookup tables, PDAs
+- **`types/v1.rs`** - Transaction v1: `MessageV1`, `TransactionConfig`, `TransactionConfigMask`, v1 limits
+- **`wire.rs`** (internal) - The only wire codec: `WireReader`, append-only writers, legacy/v0 bodies, the v1 fixed layout, and both transaction envelopes
+- **`compiler.rs`** (internal) - `CompiledKeys`: one account compiler for legacy/v0/v1 (role merging, Solana SDK key order, v0 lookup extraction that keeps signers, programs, and the durable nonce static)
+- **`builder/`** - `TransactionBuilder` (`build`, `build_v0`, `build_v1`), `InstructionBuilder`, `InstructionDataBuilder`
+- **`instructions/`** - System, SPL Token, ATA, Compute Budget, Memo, Anchor helpers; `program_ids` holds const `Pubkey`s
+- **`crypto/`** - Key derivation, signing, verification, SHA-256
+- **`short_vec.rs`** - Canonical compact-u16 encoding shared by the codec and the optional serde helpers
+- **`error.rs`** - `SolanaError` with typed `CompileError`/`DecodeError`/`EncodeError`/`SanitizeError`
 
 ### Key Design Patterns
 
-1. **Builder Pattern**: `TransactionBuilder` and `InstructionBuilder` provide fluent APIs for constructing transactions
-2. **Minimal Dependencies**: Core functionality with minimal external dependencies to keep the crate lightweight
-3. **Account Metadata Management**: `TransactionBuilder` automatically manages account metadata and deduplication
-4. **Workspace Structure**: Main library in `solana-primitives/` with examples under `solana-primitives/examples/` using Cargo examples
+1. **One codec, one compiler**: every version goes through `wire` and `compiler`; don't add per-version copies of encoding or key ordering
+2. **Parse = decode + sanitize**: `deserialize` rejects malformed bytes, size-limit violations, and anything `sanitize()` rejects; `sanitize()` is public for in-memory values
+3. **Version-aware fees**: legacy/v0 read Compute Budget instructions (micro-lamports per CU); v1 reads `TransactionConfig` (total lamports). Don't mix the two
+4. **No post-compilation mutation**: add instructions to `TransactionBuilder` and recompile; only invariant-preserving setters exist on transactions
+5. **Workspace Structure**: Main library in `solana-primitives/` with examples under `solana-primitives/examples/`
 
 ### Transaction Construction Flow
 
 1. Create `TransactionBuilder` with fee payer and recent blockhash
-2. Build individual instructions using `InstructionBuilder` or pre-built instruction modules
-3. Add instructions to transaction builder via `add_instruction()`
-4. Call `build()` to compile into final `Transaction` with proper account ordering and metadata
+2. Build instructions with `InstructionBuilder` or the `instructions` modules
+3. Add them with `add_instruction()` / `add_instructions()`
+4. Call `build()`, `build_v0(&tables)`, or `build_v1(config)`; the result is sanitized and has placeholder signatures
+5. `sign()` / `partial_sign()`, then `serialize()`
 
 ### Testing Strategy
 
-- Unit tests are co-located with implementation files
+- Unit tests are co-located with implementation files; shared fixtures live in `src/test_utils/`
+- Wire-format and instruction bytes are checked against golden vectors generated with the Solana SDK (`src/test_utils/vectors.rs`, built from `src/test_utils/scenarios.rs` with keys `sha256(label)`). Self-roundtrips alone are not enough
+- Use `hexlit::hex!` for opaque byte fixtures
 - Examples serve as integration tests demonstrating real usage patterns
-- CI runs on push/PR to main branch with build and test validation
+- CI runs build, tests (default and all features), clippy, rustfmt, and rustdoc on push/PR to main
 
 ## Coding Guidelines
 
@@ -83,7 +92,7 @@ This crate provides fundamental Solana blockchain primitives for constructing an
 3. **Always lint and format before committing code**:
    - **Required**: Run `just lint-fix` to fix lint issues
    - **Required**: Run `cargo fmt` to format code consistently
-   - **Required**: Ensure all tests pass with `cargo test`
+   - **Required**: Ensure all tests pass with `just test` (default and all features)
    - **Best Practice**: Use `just lint` and `just test` shortcuts when available
    - **Reason**: Maintains consistent code quality and prevents CI failures
 

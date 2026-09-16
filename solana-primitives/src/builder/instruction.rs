@@ -23,11 +23,8 @@ impl InstructionBuilder {
 
     /// Add an account to the instruction
     pub fn account(mut self, pubkey: Pubkey, is_signer: bool, is_writable: bool) -> Self {
-        self.accounts.push(AccountMeta {
-            pubkey,
-            is_signer,
-            is_writable,
-        });
+        self.accounts
+            .push(AccountMeta::new(pubkey, is_signer, is_writable));
         self
     }
 
@@ -62,50 +59,29 @@ impl InstructionBuilder {
 #[cfg(test)]
 mod tests {
     use super::InstructionBuilder;
-    use crate::Pubkey;
+    use crate::AccountMeta;
     use crate::instructions::{program_ids::token_program, token::transfer_checked};
-
-    fn mint_pubkey() -> Pubkey {
-        Pubkey::from_base58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v").unwrap()
-    }
-
-    fn token_pubkey() -> Pubkey {
-        Pubkey::from_base58("4q2wPZuZwQTB1dEU9sMGsJK1d8NSL1hpBjTGHBsLQNDh").unwrap()
-    }
-
-    fn authority_pubkey() -> Pubkey {
-        Pubkey::from_base58("Hozo7TadHq6PMMiGLGNvgk79Hvj5VTAM7Ny2bamQ2m8q").unwrap()
-    }
-
-    fn random_pubkey() -> Pubkey {
-        let mut bytes = [0u8; 32];
-        bytes
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, byte)| *byte = i as u8);
-        Pubkey::new(bytes)
-    }
+    use crate::test_utils::key;
 
     #[test]
-    fn test_instruction_builder() {
-        let program_id = token_program();
-        let source = token_pubkey();
-        let dest = random_pubkey();
-        let owner = authority_pubkey();
-        let mint = mint_pubkey();
-        let amount = 1_000_000;
-        let decimals = 6;
+    fn builds_the_same_instruction_as_the_helper() {
+        let (source, mint, destination, owner) =
+            (key("source"), key("mint"), key("destination"), key("owner"));
+        let data = transfer_checked(&source, &mint, &destination, &owner, 1_000_000, 6).data;
 
-        let builder_ix = InstructionBuilder::new(program_id)
+        let built = InstructionBuilder::new(token_program())
             .account(source, false, true)
-            .account(mint, false, false)
-            .account(dest, false, true)
-            .account(owner, true, false)
+            .account_meta(AccountMeta::new_readonly(mint))
+            .accounts(vec![
+                AccountMeta::new_writable(destination),
+                AccountMeta::new_signer(owner),
+            ])
+            .data(data)
             .build();
 
-        let ix = transfer_checked(&source, &mint, &dest, &owner, amount, decimals);
-
-        assert_eq!(builder_ix.program_id, token_program());
-        assert_eq!(ix.program_id, token_program());
+        assert_eq!(
+            built,
+            transfer_checked(&source, &mint, &destination, &owner, 1_000_000, 6)
+        );
     }
 }

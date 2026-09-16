@@ -2,15 +2,16 @@
 
 ## Requirements
 
-- Rust stable toolchain (2024 edition)
+- Rust 1.88 or newer (2024 edition)
 - `just` (optional)
 
 ## Development loop
 
 ```bash
 cargo fmt
-cargo clippy -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
+cargo test --all-features
 ```
 
 Or use `just`:
@@ -18,7 +19,9 @@ Or use `just`:
 ```bash
 just lint-fix
 just lint
+just fmt-check
 just test
+just doc
 just build
 ```
 

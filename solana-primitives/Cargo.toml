@@ -2,6 +2,7 @@
 name = "solana-primitives"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description.workspace = true
 license.workspace = true
 readme.workspace = true
@@ -9,15 +10,24 @@ repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 
+[features]
+default = []
+# Serde support for the Rust data model (not the transaction wire format).
+serde = ["dep:serde"]
+# Borsh support for `Pubkey` and `SignatureBytes` (not the transaction wire format).
+borsh = ["dep:borsh"]
+
 [dependencies]
 ed25519-dalek.workspace = true
-borsh.workspace = true
 bs58.workspace = true
-serde.workspace = true
 sha2.workspace = true
-base64.workspace = true
-hex.workspace = true
+serde = { workspace = true, optional = true }
+borsh = { workspace = true, optional = true }
 
 [dev-dependencies]
+base64.workspace = true
 hexlit.workspace = true
 serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

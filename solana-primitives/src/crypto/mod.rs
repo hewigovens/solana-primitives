@@ -1,6 +1,6 @@
 use crate::error::{Result, SolanaError};
 use crate::types::{Pubkey, SignatureBytes, VersionedTransaction};
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 fn signing_key(private_key: &[u8]) -> Result<SigningKey> {
@@ -33,12 +33,13 @@ pub fn sign_message(private_key: &[u8], message: &[u8]) -> Result<SignatureBytes
     ))
 }
 
-/// Verify an Ed25519 signature over `message`.
+/// Verify an Ed25519 signature over `message` with the checks Solana applies:
+/// small-order public keys and `R` points, and non-canonical `s`, are rejected.
 pub fn verify_signature(pubkey: &Pubkey, message: &[u8], signature: &SignatureBytes) -> Result<()> {
     let verifying_key =
         VerifyingKey::from_bytes(pubkey.as_bytes()).map_err(|_| SolanaError::InvalidPublicKey)?;
     verifying_key
-        .verify(
+        .verify_strict(
             message,
             &ed25519_dalek::Signature::from_bytes(signature.as_bytes()),
         )
@@ -61,6 +62,7 @@ pub fn hash_data(data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::test_utils::key;
+    use hexlit::hex;
 
     #[test]
     fn key_derivation_and_signatures() {
@@ -84,6 +86,47 @@ mod tests {
         );
         assert_eq!(
             verify_signature(&key("other"), b"hello", &signature),
+            Err(SolanaError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn rejects_small_order_keys() {
+        // The identity point as the public key with R = basepoint, s = 1 satisfies the
+        // unbatched equation for every message, but Solana rejects small-order keys.
+        let identity = Pubkey::new(hex!(
+            "0100000000000000000000000000000000000000000000000000000000000000"
+        ));
+        let signature = SignatureBytes::new(hex!(
+            "5866666666666666666666666666666666666666666666666666666666666666"
+            "0100000000000000000000000000000000000000000000000000000000000000"
+        ));
+        for message in [&b"any"[..], b"message"] {
+            assert_eq!(
+                verify_signature(&identity, message, &signature),
+                Err(SolanaError::InvalidSignature)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_canonical_s() {
+        let private_key = crate::crypto::hash_data(b"payer");
+        let pubkey = Pubkey::new(get_public_key(&private_key).unwrap());
+        let signature = sign_message(&private_key, b"hello").unwrap();
+        // s + l encodes the same scalar, but only the reduced form is accepted.
+        const L: [u8; 32] =
+            hex!("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010");
+        let mut bytes = *signature.as_bytes();
+        let mut carry = 0u16;
+        for (byte, l) in bytes[32..].iter_mut().zip(L) {
+            let sum = u16::from(*byte) + u16::from(l) + carry;
+            *byte = sum as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0);
+        assert_eq!(
+            verify_signature(&pubkey, b"hello", &SignatureBytes::new(bytes)),
             Err(SolanaError::InvalidSignature)
         );
     }

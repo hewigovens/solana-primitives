@@ -1,25 +1,23 @@
 use crate::types::Pubkey;
 use crate::{Result, SolanaError};
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 const LOOKUP_TABLE_META_SIZE: usize = 56;
 /// On-chain `ProgramState` discriminant for an initialized lookup table (0 = `Uninitialized`).
 const LOOKUP_TABLE_DISCRIMINANT: u32 = 1;
+/// Offset of the bincode `Option<Pubkey>` authority tag (after the discriminant,
+/// two `u64` slots, and a `u8` index).
+const AUTHORITY_TAG_OFFSET: usize = 21;
 
 /// Address lookup table lookup information
 /// Used to describe which addresses in a lookup table to use in a transaction
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageAddressTableLookup {
     /// Address lookup table account key
     pub account_key: Pubkey,
     /// List of indices used to load writable account addresses
-    #[serde(with = "crate::short_vec")]
     pub writable_indexes: Vec<u8>,
     /// List of indices used to load readonly account addresses
-    #[serde(with = "crate::short_vec")]
     pub readonly_indexes: Vec<u8>,
 }
 
@@ -35,9 +33,8 @@ impl MessageAddressTableLookup {
 }
 
 /// Address lookup table account
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AddressLookupTableAccount {
     /// The lookup table's public key
     pub key: Pubkey,
@@ -72,7 +69,7 @@ impl AddressLookupTableAccount {
             .split_at_checked(LOOKUP_TABLE_META_SIZE)
             .ok_or(SolanaError::InvalidAccountData)?;
         let discriminant = meta.first_chunk().copied().map(u32::from_le_bytes);
-        if discriminant != Some(LOOKUP_TABLE_DISCRIMINANT) {
+        if discriminant != Some(LOOKUP_TABLE_DISCRIMINANT) || meta[AUTHORITY_TAG_OFFSET] > 1 {
             return Err(SolanaError::InvalidAccountData);
         }
 
@@ -168,5 +165,21 @@ mod tests {
         let result = AddressLookupTableAccount::from_account_data(key, &data);
 
         assert!(matches!(result, Err(SolanaError::InvalidAccountData)));
+    }
+
+    #[test]
+    fn test_address_lookup_table_from_account_data_checks_authority_tag() {
+        let key = Pubkey::new([9; 32]);
+        let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
+        data[0..4].copy_from_slice(&LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());
+        for tag in [0, 1] {
+            data[AUTHORITY_TAG_OFFSET] = tag;
+            assert!(AddressLookupTableAccount::from_account_data(key, &data).is_ok());
+        }
+        data[AUTHORITY_TAG_OFFSET] = 2;
+        assert_eq!(
+            AddressLookupTableAccount::from_account_data(key, &data),
+            Err(SolanaError::InvalidAccountData)
+        );
     }
 }

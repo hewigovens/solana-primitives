@@ -1,6 +1,8 @@
 use crate::crypto::{get_public_key, sign_message, verify_signature};
 use crate::error::{DecodeError, Result, SanitizeError, SolanaError};
-use crate::instructions::compute_budget::ComputeBudgetInstruction;
+use crate::instructions::compute_budget::{
+    ComputeBudgetInstruction, parse_compute_budget_requests,
+};
 use crate::instructions::program_ids::{compute_budget_program, system_program};
 use crate::instructions::system::is_advance_nonce_instruction_data;
 use crate::types::{
@@ -8,8 +10,6 @@ use crate::types::{
     Pubkey, SignatureBytes, VersionedMessage, v1,
 };
 use crate::wire;
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 /// Transaction wire format version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,9 +26,8 @@ pub enum TransactionVersion {
 ///
 /// Serialization, signing, and verification share their implementation with
 /// [`VersionedTransaction`].
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transaction {
     /// One signature per required signer, in account key order.
     pub signatures: Vec<SignatureBytes>,
@@ -157,7 +156,8 @@ impl Transaction {
 }
 
 /// A transaction of any supported version.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VersionedTransaction {
     /// One signature per required signer, in account key order.
     pub signatures: Vec<SignatureBytes>,
@@ -353,71 +353,94 @@ impl VersionedTransaction {
             .copied()
     }
 
-    /// Compute Budget instructions with their positions in the instruction list.
-    /// Always empty for v1, whose runtime ignores them.
-    fn compute_budget_instructions(
-        &self,
-    ) -> impl Iterator<Item = (usize, ComputeBudgetInstruction)> + '_ {
+    /// Legacy/v0 Compute Budget requests with their instruction positions, or `None`
+    /// when the runtime would reject them. v1 has none: its runtime ignores the
+    /// instructions.
+    fn compute_budget_requests(&self) -> Option<Vec<(usize, ComputeBudgetInstruction)>> {
+        if self.version() == TransactionVersion::V1 {
+            return Some(Vec::new());
+        }
         let program_id = compute_budget_program();
-        let instructions = match self.message {
-            VersionedMessage::V1(_) => &[],
-            _ => self.instructions(),
-        };
-        instructions
+        let instructions = self
+            .instructions()
             .iter()
             .enumerate()
-            .filter(move |(_, instruction)| self.program_id(instruction) == Some(program_id))
-            .filter_map(|(index, instruction)| {
-                ComputeBudgetInstruction::parse(&instruction.data).map(|parsed| (index, parsed))
-            })
+            .filter(|(_, instruction)| self.program_id(instruction) == Some(program_id))
+            .map(|(index, instruction)| (index, instruction.data.as_slice()));
+        parse_compute_budget_requests(instructions)
     }
 
     fn find_compute_budget<T>(
         &self,
         select: impl Fn(ComputeBudgetInstruction) -> Option<T>,
     ) -> Option<T> {
-        self.compute_budget_instructions()
-            .find_map(|(_, instruction)| select(instruction))
+        self.compute_budget_requests()?
+            .into_iter()
+            .find_map(|(_, request)| select(request))
     }
 
-    /// Overwrite the value bytes (after the discriminant) of the first instruction
-    /// accepted by `select`, keeping the instruction length unchanged.
+    /// Overwrite the value bytes (after the discriminant) of the request accepted by
+    /// `select`, keeping the instruction length unchanged. Returns `false` if there
+    /// is no such valid request.
     fn replace_compute_budget_value(
         &mut self,
         select: impl Fn(ComputeBudgetInstruction) -> bool,
         value: &[u8],
     ) -> bool {
         let Some((index, _)) = self
-            .compute_budget_instructions()
-            .find(|(_, instruction)| select(*instruction))
+            .compute_budget_requests()
+            .and_then(|requests| requests.into_iter().find(|(_, request)| select(*request)))
         else {
             return false;
         };
-        self.message.instructions_mut()[index].data[1..=value.len()].copy_from_slice(value);
+        let target = &mut self.message.instructions_mut()[index].data[1..=value.len()];
+        if target != value {
+            target.copy_from_slice(value);
+            self.clear_signatures();
+        }
         true
     }
 
-    fn v1_config_mut(&mut self) -> Option<&mut v1::TransactionConfig> {
-        match &mut self.message {
-            VersionedMessage::V1(message) => Some(&mut message.config),
-            _ => None,
+    /// Update the v1 config, clearing signatures if it changes.
+    fn update_v1_config(&mut self, update: impl FnOnce(&mut v1::TransactionConfig)) -> Result<()> {
+        let VersionedMessage::V1(message) = &mut self.message else {
+            return Err(SolanaError::UnsupportedVersion);
+        };
+        let before = message.config;
+        update(&mut message.config);
+        if message.config != before {
+            self.clear_signatures();
+        }
+        Ok(())
+    }
+
+    /// Reset every signature to the placeholder after the signed bytes change.
+    fn clear_signatures(&mut self) {
+        self.signatures = placeholder_signatures(self.header());
+    }
+
+    /// Replace the recent blockhash (the v1 lifetime specifier), clearing signatures
+    /// if it changes.
+    pub fn set_recent_blockhash(&mut self, recent_blockhash: [u8; 32]) {
+        if *self.recent_blockhash() != recent_blockhash {
+            self.message.set_recent_blockhash(recent_blockhash);
+            self.clear_signatures();
         }
     }
 
-    /// The legacy/v0 compute unit price in micro-lamports per compute unit, from the
-    /// first `SetComputeUnitPrice` instruction.
+    /// The legacy/v0 compute unit price in micro-lamports per compute unit.
     ///
     /// Always `None` for v1, which pays a total fee instead; see
     /// [`VersionedTransaction::priority_fee_lamports`].
     pub fn get_compute_unit_price(&self) -> Option<u64> {
-        self.find_compute_budget(|instruction| match instruction {
+        self.find_compute_budget(|request| match request {
             ComputeBudgetInstruction::SetComputeUnitPrice(micro_lamports) => Some(micro_lamports),
             _ => None,
         })
     }
 
-    /// Overwrite the first `SetComputeUnitPrice` value; returns `false` if there is none.
-    /// Existing signatures become invalid.
+    /// Overwrite the `SetComputeUnitPrice` value; returns `false` if there is none.
+    /// Signatures are cleared if the value changes.
     ///
     /// Fails with [`SolanaError::UnsupportedVersion`] for v1; use
     /// [`VersionedTransaction::set_priority_fee_lamports`].
@@ -426,12 +449,7 @@ impl VersionedTransaction {
             return Err(SolanaError::UnsupportedVersion);
         }
         Ok(self.replace_compute_budget_value(
-            |instruction| {
-                matches!(
-                    instruction,
-                    ComputeBudgetInstruction::SetComputeUnitPrice(_)
-                )
-            },
+            |request| matches!(request, ComputeBudgetInstruction::SetComputeUnitPrice(_)),
             &micro_lamports.to_le_bytes(),
         ))
     }
@@ -441,25 +459,21 @@ impl VersionedTransaction {
         self.message.transaction_config()?.priority_fee
     }
 
-    /// Set the v1 total priority fee in lamports. Existing signatures become invalid.
+    /// Set the v1 total priority fee in lamports. Signatures are cleared if it changes.
     ///
     /// Fails with [`SolanaError::UnsupportedVersion`] for legacy and v0; use
     /// [`VersionedTransaction::set_compute_unit_price`].
     pub fn set_priority_fee_lamports(&mut self, lamports: u64) -> Result<()> {
-        let config = self
-            .v1_config_mut()
-            .ok_or(SolanaError::UnsupportedVersion)?;
-        config.priority_fee = Some(lamports);
-        Ok(())
+        self.update_v1_config(|config| config.priority_fee = Some(lamports))
     }
 
-    /// The requested compute unit limit: the v1 config value, or the first
-    /// `SetComputeUnitLimit` instruction for legacy and v0.
+    /// The requested compute unit limit: the v1 config value, or the legacy/v0
+    /// `SetComputeUnitLimit` instruction.
     pub fn get_compute_unit_limit(&self) -> Option<u32> {
         if let Some(config) = self.message.transaction_config() {
             return config.compute_unit_limit;
         }
-        self.find_compute_budget(|instruction| match instruction {
+        self.find_compute_budget(|request| match request {
             ComputeBudgetInstruction::SetComputeUnitLimit(units) => Some(units),
             _ => None,
         })
@@ -467,42 +481,37 @@ impl VersionedTransaction {
 
     /// Set the compute unit limit; returns `false` if a legacy/v0 transaction has no
     /// `SetComputeUnitLimit` instruction to overwrite. v1 always sets its config.
-    /// Existing signatures become invalid.
+    /// Signatures are cleared if the value changes.
     pub fn set_compute_unit_limit(&mut self, units: u32) -> Result<bool> {
-        if let Some(config) = self.v1_config_mut() {
-            config.compute_unit_limit = Some(units);
+        if self.version() == TransactionVersion::V1 {
+            self.update_v1_config(|config| config.compute_unit_limit = Some(units))?;
             return Ok(true);
         }
         Ok(self.replace_compute_budget_value(
-            |instruction| {
-                matches!(
-                    instruction,
-                    ComputeBudgetInstruction::SetComputeUnitLimit(_)
-                )
-            },
+            |request| matches!(request, ComputeBudgetInstruction::SetComputeUnitLimit(_)),
             &units.to_le_bytes(),
         ))
     }
 
     /// The requested loaded accounts data size limit: the v1 config value, or the
-    /// first `SetLoadedAccountsDataSizeLimit` instruction for legacy and v0.
+    /// legacy/v0 `SetLoadedAccountsDataSizeLimit` instruction.
     pub fn get_loaded_accounts_data_size_limit(&self) -> Option<u32> {
         if let Some(config) = self.message.transaction_config() {
             return config.loaded_accounts_data_size_limit;
         }
-        self.find_compute_budget(|instruction| match instruction {
+        self.find_compute_budget(|request| match request {
             ComputeBudgetInstruction::SetLoadedAccountsDataSizeLimit(bytes) => Some(bytes),
             _ => None,
         })
     }
 
-    /// The requested heap size: the v1 config value, or the first
-    /// `RequestHeapFrame` instruction for legacy and v0.
+    /// The requested heap size: the v1 config value, or the legacy/v0
+    /// `RequestHeapFrame` instruction.
     pub fn get_heap_size(&self) -> Option<u32> {
         if let Some(config) = self.message.transaction_config() {
             return config.heap_size;
         }
-        self.find_compute_budget(|instruction| match instruction {
+        self.find_compute_budget(|request| match request {
             ComputeBudgetInstruction::RequestHeapFrame(bytes) => Some(bytes),
             _ => None,
         })
@@ -550,11 +559,16 @@ fn sign(
     signatures.resize(signers.len(), SignatureBytes::default());
     for private_key in private_keys {
         let pubkey = Pubkey::new(get_public_key(private_key)?);
-        let index = signers
-            .iter()
-            .position(|signer| *signer == pubkey)
-            .ok_or(SolanaError::UnexpectedSigner(pubkey))?;
-        signatures[index] = sign_message(private_key, message_data)?;
+        if !signers.contains(&pubkey) {
+            return Err(SolanaError::UnexpectedSigner(pubkey));
+        }
+        let signature = sign_message(private_key, message_data)?;
+        // A key may occupy several signer slots; each needs the signature.
+        for (signer, slot) in signers.iter().zip(signatures.iter_mut()) {
+            if *signer == pubkey {
+                *slot = signature;
+            }
+        }
     }
     if require_all
         && let Some((signer, _)) = signers
@@ -731,6 +745,110 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_signer_keys_get_every_slot() {
+        let (payer_key, payer) = signer("payer");
+        // Sanitize allows a repeated key; the runtime rejects it later, but signing
+        // must still fill both slots, as the Solana SDK does.
+        let message = Message {
+            header: MessageHeader {
+                num_required_signatures: 2,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: vec![payer, payer, key("program")],
+            instructions: vec![CompiledInstruction {
+                program_id_index: 2,
+                accounts: vec![],
+                data: vec![],
+            }],
+            ..Message::default()
+        };
+        let mut tx = Transaction::new(message);
+        tx.sign(&[&payer_key]).unwrap();
+        assert_eq!(tx.signatures[0], tx.signatures[1]);
+        assert_eq!(tx.verify(), Ok(()));
+    }
+
+    #[test]
+    fn setters_clear_stale_signatures() {
+        let (payer_key, payer) = signer("payer");
+        let (cosigner_key, cosigner) = signer("cosigner");
+        let transfer = |from: &Pubkey| system::transfer(from, &key("recipient"), 1);
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instructions([
+            compute_budget::set_compute_unit_price(1),
+            compute_budget::set_compute_unit_limit(1),
+            transfer(&payer),
+            transfer(&cosigner),
+        ]);
+        let sign_all = |tx: &mut VersionedTransaction| {
+            tx.sign(&[&payer_key, &cosigner_key]).unwrap();
+            assert!(tx.is_signed());
+        };
+
+        let mut legacy = VersionedTransaction::from(builder.build().unwrap());
+        sign_all(&mut legacy);
+        // Writing the current value keeps the signatures.
+        assert_eq!(legacy.set_compute_unit_price(1), Ok(true));
+        assert!(legacy.is_signed());
+        assert_eq!(legacy.set_compute_unit_price(2), Ok(true));
+        assert!(!legacy.is_signed());
+        // Re-signing with one key must not leave the other stale signature behind.
+        assert_eq!(
+            legacy.sign(&[&payer_key]),
+            Err(SolanaError::MissingSigner(cosigner))
+        );
+        sign_all(&mut legacy);
+        assert_eq!(legacy.set_compute_unit_limit(2), Ok(true));
+        assert!(!legacy.is_signed());
+        sign_all(&mut legacy);
+        legacy.set_recent_blockhash([0; 32]);
+        assert!(legacy.is_signed());
+        legacy.set_recent_blockhash([1; 32]);
+        assert!(!legacy.is_signed());
+
+        let mut v1 = builder.build_v1(TransactionConfig::new()).unwrap();
+        sign_all(&mut v1);
+        v1.set_priority_fee_lamports(5).unwrap();
+        assert!(!v1.is_signed());
+        sign_all(&mut v1);
+        v1.set_priority_fee_lamports(5).unwrap();
+        assert!(v1.is_signed());
+        v1.set_compute_unit_limit(9).unwrap();
+        assert!(!v1.is_signed());
+        sign_all(&mut v1);
+        assert_eq!(v1.verify(), Ok(()));
+    }
+
+    #[test]
+    fn compute_budget_accessors_follow_the_runtime() {
+        let payer = key("payer");
+        let retired = Instruction {
+            data: vec![0],
+            ..compute_budget::set_compute_unit_limit(0)
+        };
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instructions([
+            retired,
+            compute_budget::set_compute_unit_limit(5),
+            compute_budget::set_compute_unit_price(7),
+        ]);
+        // The runtime fails the transaction, so nothing is requested.
+        let mut tx = VersionedTransaction::from(builder.build().unwrap());
+        assert_eq!(tx.get_compute_unit_limit(), None);
+        assert_eq!(tx.get_compute_unit_price(), None);
+        assert_eq!(tx.set_compute_unit_price(8), Ok(false));
+
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instructions([
+            compute_budget::set_compute_unit_limit(5),
+            compute_budget::set_compute_unit_limit(6),
+        ]);
+        let tx = VersionedTransaction::from(builder.build().unwrap());
+        assert_eq!(tx.get_compute_unit_limit(), None);
+    }
+
+    #[test]
     fn legacy_transaction_shares_the_versioned_implementation() {
         let (payer_key, payer) = signer("payer");
         let mut builder = TransactionBuilder::new(payer, [7; 32]);
@@ -819,7 +937,8 @@ mod tests {
                     .with_priority_fee(9)
             )
         );
-        assert_eq!(tx.verify(), Err(SolanaError::InvalidSignature));
+        // The old signatures no longer cover the message, so they are cleared.
+        assert!(tx.signatures.iter().all(SignatureBytes::is_placeholder));
 
         let partial = VersionedTransaction::deserialize(&vectors::V1_NONCE_TX).unwrap();
         assert!(partial.uses_durable_nonce());
@@ -929,6 +1048,23 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_roundtrips_every_version() {
+        for bytes in [
+            &base64(LEGACY_TX)[..],
+            &base64(MAYAN_V0_TX),
+            &vectors::V1_COMPLEX_TX,
+        ] {
+            let tx = VersionedTransaction::deserialize(bytes).unwrap();
+            let json = serde_json::to_string(&tx).unwrap();
+            assert_eq!(
+                serde_json::from_str::<VersionedTransaction>(&json).unwrap(),
+                tx
+            );
+        }
+    }
+
     #[test]
     fn deserialize_accepts_minimal_transactions() {
         let mut legacy = legacy_tx_prefix(1, [1, 0, 1], 2);
@@ -1019,14 +1155,37 @@ mod tests {
 
     #[test]
     fn deserialize_sanitizes() {
-        use SanitizeError::*;
         let cases: [([u8; 3], [u8; 5], SanitizeError); 6] = [
-            ([1, 0, 5], [1, 1, 1, 0, 0], NotEnoughAccountKeys),
-            ([1, 1, 1], [1, 1, 1, 0, 0], NoWritableFeePayer),
-            ([0, 0, 1], [1, 1, 1, 0, 0], NoWritableFeePayer),
-            ([1, 0, 1], [1, 0, 1, 0, 0], InvalidProgramIndex),
-            ([1, 0, 1], [1, 2, 1, 0, 0], InvalidProgramIndex),
-            ([1, 0, 1], [1, 1, 1, 2, 0], InvalidAccountIndex),
+            (
+                [1, 0, 5],
+                [1, 1, 1, 0, 0],
+                SanitizeError::NotEnoughAccountKeys,
+            ),
+            (
+                [1, 1, 1],
+                [1, 1, 1, 0, 0],
+                SanitizeError::NoWritableFeePayer,
+            ),
+            (
+                [0, 0, 1],
+                [1, 1, 1, 0, 0],
+                SanitizeError::NoWritableFeePayer,
+            ),
+            (
+                [1, 0, 1],
+                [1, 0, 1, 0, 0],
+                SanitizeError::InvalidProgramIndex,
+            ),
+            (
+                [1, 0, 1],
+                [1, 2, 1, 0, 0],
+                SanitizeError::InvalidProgramIndex,
+            ),
+            (
+                [1, 0, 1],
+                [1, 1, 1, 2, 0],
+                SanitizeError::InvalidAccountIndex,
+            ),
         ];
         for (header, instruction, expected) in cases {
             let mut bytes = legacy_tx_prefix(header[0], header, 2);
@@ -1041,7 +1200,7 @@ mod tests {
         extra_signature.extend_from_slice(&[1, 1, 1, 0, 0]);
         assert_eq!(
             VersionedTransaction::deserialize(&extra_signature),
-            Err(SignatureCountMismatch {
+            Err(SanitizeError::SignatureCountMismatch {
                 expected: 1,
                 actual: 2
             }

@@ -70,7 +70,8 @@ impl TransactionBuilder {
     ///
     /// All accounts are inline. Compute Budget instructions are not translated
     /// into `config` (the runtime ignores them for v1), so set the compute unit
-    /// limit and fee there; unset values mean zero, not the legacy defaults.
+    /// limit, loaded accounts data size limit, and fee there; unset values mean
+    /// zero, not the legacy defaults.
     pub fn build_v1(&self, config: TransactionConfig) -> Result<VersionedTransaction> {
         let message = MessageV1::try_compile(
             &self.fee_payer,

@@ -1,14 +1,14 @@
 use crate::{Result, SolanaError};
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
 /// A Solana public key (32 bytes).
 ///
 /// Ordering is lexicographic over the bytes, matching the Solana SDK.
-#[derive(
-    Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, BorshSerialize, BorshDeserialize,
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
 )]
 pub struct Pubkey([u8; 32]);
 
@@ -109,21 +109,23 @@ impl AsRef<[u8]> for Pubkey {
     }
 }
 
-impl Serialize for Pubkey {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+/// Serialized as a base58 string.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Pubkey {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_base58())
     }
 }
 
-impl<'de> Deserialize<'de> for Pubkey {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = <String as Deserialize>::deserialize(deserializer)?;
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Pubkey {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
         Self::from_base58(&s).map_err(serde::de::Error::custom)
     }
 }
@@ -187,5 +189,24 @@ mod tests {
                 Pubkey::new([2; 32])
             ]
         );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_uses_base58() {
+        let pubkey = Pubkey::from_str_const(TOKEN);
+        let json = serde_json::to_string(&pubkey).unwrap();
+        assert_eq!(json, format!("\"{TOKEN}\""));
+        assert_eq!(serde_json::from_str::<Pubkey>(&json).unwrap(), pubkey);
+        assert!(serde_json::from_str::<Pubkey>("\"2g\"").is_err());
+    }
+
+    #[cfg(feature = "borsh")]
+    #[test]
+    fn borsh_uses_raw_bytes() {
+        let pubkey = Pubkey::new([7; 32]);
+        let bytes = borsh::to_vec(&pubkey).unwrap();
+        assert_eq!(bytes, [7; 32]);
+        assert_eq!(borsh::from_slice::<Pubkey>(&bytes).unwrap(), pubkey);
     }
 }

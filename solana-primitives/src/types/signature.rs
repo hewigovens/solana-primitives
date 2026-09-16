@@ -1,13 +1,15 @@
 use crate::error::{Result, SolanaError};
-use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
 /// A 64-byte Ed25519 signature.
 ///
 /// The all-zero value is the placeholder for a missing signature.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "borsh",
+    derive(borsh::BorshSerialize, borsh::BorshDeserialize)
+)]
 pub struct SignatureBytes([u8; 64]);
 
 impl Default for SignatureBytes {
@@ -97,21 +99,23 @@ impl AsRef<[u8]> for SignatureBytes {
     }
 }
 
-impl Serialize for SignatureBytes {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
+/// Serialized as a base58 string.
+#[cfg(feature = "serde")]
+impl serde::Serialize for SignatureBytes {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_base58())
     }
 }
 
-impl<'de> Deserialize<'de> for SignatureBytes {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = <String as Deserialize>::deserialize(deserializer)?;
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for SignatureBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
         Self::from_base58(&s).map_err(serde::de::Error::custom)
     }
 }
@@ -137,5 +141,24 @@ mod tests {
         );
         assert!(SignatureBytes::default().is_placeholder());
         assert!(!signature.is_placeholder());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_uses_base58() {
+        let signature = SignatureBytes::new([3; 64]);
+        let json = serde_json::to_string(&signature).unwrap();
+        assert_eq!(json, format!("\"{signature}\""));
+        assert_eq!(
+            serde_json::from_str::<SignatureBytes>(&json).unwrap(),
+            signature
+        );
+    }
+
+    #[cfg(feature = "borsh")]
+    #[test]
+    fn borsh_uses_raw_bytes() {
+        let signature = SignatureBytes::new([3; 64]);
+        assert_eq!(borsh::to_vec(&signature).unwrap(), [3; 64]);
     }
 }

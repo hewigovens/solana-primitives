@@ -25,7 +25,6 @@ use crate::compiler::{CompiledKeys, compile_instructions};
 use crate::error::{Result, SanitizeError};
 use crate::types::{CompiledInstruction, Instruction, MessageHeader, Pubkey};
 use crate::wire;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// First byte of a v1 message and transaction (`0x80 | 1`).
@@ -49,9 +48,11 @@ pub const DEFAULT_HEAP_SIZE: u32 = MIN_HEAP_SIZE;
 ///
 /// Unset fields fall back to protocol minimums, not the legacy/v0 defaults:
 /// a priority fee of 0, a compute unit limit of 0, a loaded accounts data
-/// size limit of 0, and a heap of [`DEFAULT_HEAP_SIZE`]. Set the compute unit
-/// limit explicitly or the transaction cannot execute.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// size limit of 0, and a heap of [`DEFAULT_HEAP_SIZE`]. Set both the compute
+/// unit limit and the loaded accounts data size limit, or the transaction
+/// fails when it executes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransactionConfig {
     /// Total priority fee in lamports (not micro-lamports per compute unit).
     pub priority_fee: Option<u64>,
@@ -175,7 +176,8 @@ impl TransactionConfigMask {
 }
 
 /// A v1 message.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageV1 {
     /// The message header, identifying signed and read-only `account_keys`.
     pub header: MessageHeader,
@@ -354,39 +356,38 @@ mod tests {
 
     #[test]
     fn sanitize_rules() {
-        use SanitizeError::*;
         assert_eq!(message().sanitize(), Ok(()));
 
         let mut m = message();
         m.header.num_required_signatures = 13;
         m.account_keys = (0..13).map(|i| Pubkey::new([i; 32])).collect();
-        assert_eq!(sanitize_err(m), TooManySignatures);
+        assert_eq!(sanitize_err(m), SanitizeError::TooManySignatures);
 
         let mut m = message();
         m.instructions = vec![m.instructions[0].clone(); 65];
-        assert_eq!(sanitize_err(m), TooManyInstructions);
+        assert_eq!(sanitize_err(m), SanitizeError::TooManyInstructions);
         let mut m = message();
         m.instructions = vec![m.instructions[0].clone(); 64];
         assert_eq!(m.sanitize(), Ok(()));
 
         let mut m = message();
         m.account_keys = (0..65).map(|i| Pubkey::new([i; 32])).collect();
-        assert_eq!(sanitize_err(m), TooManyAccountKeys);
+        assert_eq!(sanitize_err(m), SanitizeError::TooManyAccountKeys);
         let mut m = message();
         m.account_keys = (0..64).map(|i| Pubkey::new([i; 32])).collect();
         assert_eq!(m.sanitize(), Ok(()));
 
         let mut m = message();
         m.header.num_readonly_unsigned_accounts = 3;
-        assert_eq!(sanitize_err(m), NotEnoughAccountKeys);
+        assert_eq!(sanitize_err(m), SanitizeError::NotEnoughAccountKeys);
 
         let mut m = message();
         m.header.num_readonly_signed_accounts = 1;
-        assert_eq!(sanitize_err(m), NoWritableFeePayer);
+        assert_eq!(sanitize_err(m), SanitizeError::NoWritableFeePayer);
 
         let mut m = message();
         m.account_keys[2] = m.account_keys[0];
-        assert_eq!(sanitize_err(m), DuplicateAccountKeys);
+        assert_eq!(sanitize_err(m), SanitizeError::DuplicateAccountKeys);
 
         for heap_size in [
             MIN_HEAP_SIZE - 1024,
@@ -395,7 +396,11 @@ mod tests {
         ] {
             let mut m = message();
             m.config.heap_size = Some(heap_size);
-            assert_eq!(sanitize_err(m), InvalidHeapSize, "{heap_size}");
+            assert_eq!(
+                sanitize_err(m),
+                SanitizeError::InvalidHeapSize,
+                "{heap_size}"
+            );
         }
         for heap_size in [MIN_HEAP_SIZE, 64 * 1024, MAX_HEAP_SIZE] {
             let mut m = message();
@@ -405,18 +410,18 @@ mod tests {
 
         let mut m = message();
         m.instructions[0].program_id_index = 0;
-        assert_eq!(sanitize_err(m), InvalidProgramIndex);
+        assert_eq!(sanitize_err(m), SanitizeError::InvalidProgramIndex);
         let mut m = message();
         m.instructions[0].program_id_index = 3;
-        assert_eq!(sanitize_err(m), InvalidProgramIndex);
+        assert_eq!(sanitize_err(m), SanitizeError::InvalidProgramIndex);
         let mut m = message();
         m.instructions[0].accounts = vec![3];
-        assert_eq!(sanitize_err(m), InvalidAccountIndex);
+        assert_eq!(sanitize_err(m), SanitizeError::InvalidAccountIndex);
         let mut m = message();
         m.instructions[0].accounts = vec![0; 256];
-        assert_eq!(sanitize_err(m), InstructionAccountsTooLarge);
+        assert_eq!(sanitize_err(m), SanitizeError::InstructionAccountsTooLarge);
         let mut m = message();
         m.instructions[0].data = vec![0; 65_536];
-        assert_eq!(sanitize_err(m), InstructionDataTooLarge);
+        assert_eq!(sanitize_err(m), SanitizeError::InstructionDataTooLarge);
     }
 }

@@ -7,11 +7,13 @@
 //! encoding) and values above `u16::MAX` are rejected, as in `solana-short-vec`.
 
 use crate::error::{DecodeError, EncodeError};
+#[cfg(feature = "serde")]
 use serde::{
     Deserialize, Serialize,
     de::{self, Deserializer, SeqAccess, Visitor},
     ser::{self, SerializeTuple, Serializer},
 };
+#[cfg(feature = "serde")]
 use std::{fmt, marker::PhantomData};
 
 /// Maximum encoded length of a compact-u16.
@@ -91,6 +93,7 @@ pub fn decode_compact_u16_len(bytes: &[u8]) -> Result<(usize, usize), DecodeErro
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShortU16(pub u16);
 
+#[cfg(feature = "serde")]
 impl Serialize for ShortU16 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let (bytes, len) = encode(self.0);
@@ -103,6 +106,7 @@ impl Serialize for ShortU16 {
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for ShortU16 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct ShortU16Visitor;
@@ -126,6 +130,7 @@ impl<'de> Deserialize<'de> for ShortU16 {
 /// Serialize a slice as a compact-u16 length followed by its elements.
 ///
 /// Use with `#[serde(with = "solana_primitives::short_vec")]`.
+#[cfg(feature = "serde")]
 pub fn serialize<S: Serializer, T: Serialize>(
     elements: &[T],
     serializer: S,
@@ -144,6 +149,7 @@ pub fn serialize<S: Serializer, T: Serialize>(
 /// Deserialize a compact-u16 length followed by that many elements.
 ///
 /// Use with `#[serde(with = "solana_primitives::short_vec")]`.
+#[cfg(feature = "serde")]
 pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -179,15 +185,18 @@ where
 }
 
 /// A `Vec<T>` serialized with serde using a compact-u16 length prefix.
+#[cfg(feature = "serde")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShortVec<T>(pub Vec<T>);
 
+#[cfg(feature = "serde")]
 impl<T: Serialize> Serialize for ShortVec<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serialize(&self.0, serializer)
     }
 }
 
+#[cfg(feature = "serde")]
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for ShortVec<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserialize(deserializer).map(ShortVec)
@@ -248,23 +257,23 @@ mod tests {
 
     #[test]
     fn decode_rejects_what_upstream_rejects() {
-        use DecodeError::*;
         let rejected: [(&[u8], DecodeError); 9] = [
-            (&[], UnexpectedEof),
-            (&hex!("80"), UnexpectedEof),
-            (&hex!("8080"), UnexpectedEof),
-            (&hex!("8000"), NonCanonicalShortU16),
-            (&hex!("8100"), NonCanonicalShortU16),
-            (&hex!("808000"), NonCanonicalShortU16),
-            (&hex!("ffff04"), ShortU16Overflow),
-            (&hex!("808080"), ShortU16Overflow),
-            (&hex!("ffff7f"), ShortU16Overflow),
+            (&[], DecodeError::UnexpectedEof),
+            (&hex!("80"), DecodeError::UnexpectedEof),
+            (&hex!("8080"), DecodeError::UnexpectedEof),
+            (&hex!("8000"), DecodeError::NonCanonicalShortU16),
+            (&hex!("8100"), DecodeError::NonCanonicalShortU16),
+            (&hex!("808000"), DecodeError::NonCanonicalShortU16),
+            (&hex!("ffff04"), DecodeError::ShortU16Overflow),
+            (&hex!("808080"), DecodeError::ShortU16Overflow),
+            (&hex!("ffff7f"), DecodeError::ShortU16Overflow),
         ];
         for (bytes, err) in rejected {
             assert_eq!(decode_compact_u16_len(bytes), Err(err), "{bytes:02x?}");
         }
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn serde_uses_the_same_encoding() {
         for (value, bytes) in ENCODINGS {
