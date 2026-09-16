@@ -22,9 +22,9 @@ codegen-units = 1
 ed25519-dalek = "3.0"
 borsh = { version = "1.6", features = ["derive"] }
 bs58 = "0.5"
-thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 base64 = "0.22"
 hex = "0.4"
 hexlit = "0.5"
+serde_json = "1.0"

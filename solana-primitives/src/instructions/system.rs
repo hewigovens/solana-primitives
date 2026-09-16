@@ -219,11 +219,16 @@ impl SystemInstruction {
 /// Instruction data prefix of `SystemInstruction::AdvanceNonceAccount`.
 const ADVANCE_NONCE_ACCOUNT_DATA: [u8; 4] = [4, 0, 0, 0];
 
+/// Whether System program instruction data is `AdvanceNonceAccount`.
+pub(crate) fn is_advance_nonce_instruction_data(data: &[u8]) -> bool {
+    data.starts_with(&ADVANCE_NONCE_ACCOUNT_DATA)
+}
+
 /// Whether `instruction` is a System `AdvanceNonceAccount`, which marks a durable-nonce
 /// transaction when it is the first instruction.
 pub(crate) fn is_advance_nonce_instruction(instruction: &Instruction) -> bool {
     instruction.program_id == system_program()
-        && instruction.data.starts_with(&ADVANCE_NONCE_ACCOUNT_DATA)
+        && is_advance_nonce_instruction_data(&instruction.data)
 }
 
 /// The nonce account of a durable-nonce instruction list, if any.

@@ -1,8 +1,8 @@
 use crate::instructions::system::durable_nonce_account;
 use crate::{
-    AccountMeta, AddressLookupTableAccount, CompiledInstruction, Instruction, Message,
-    MessageAddressTableLookup, MessageHeader, Pubkey, Result, SignatureBytes, SolanaError,
-    Transaction, VersionedMessageV0, VersionedTransaction,
+    AccountMeta, AddressLookupTableAccount, CompileError, CompiledInstruction, Instruction,
+    Message, MessageAddressTableLookup, MessageHeader, MessageV0, Pubkey, Result, SignatureBytes,
+    SolanaError, Transaction, VersionedMessage, VersionedTransaction,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -146,7 +146,7 @@ impl TransactionBuilder {
 
         // Legacy messages address accounts with a single `u8` index (max 256 accounts).
         if account_keys.len() > u8::MAX as usize + 1 {
-            return Err(SolanaError::InvalidMessage);
+            return Err(CompileError::AccountIndexOverflow.into());
         }
 
         // Create a map of pubkey to index for quick lookups
@@ -199,7 +199,7 @@ impl TransactionBuilder {
             || num_readonly_signed_accounts > u8::MAX as usize
             || num_readonly_unsigned_accounts > u8::MAX as usize
         {
-            return Err(SolanaError::InvalidMessage);
+            return Err(CompileError::AccountIndexOverflow.into());
         }
 
         let header = MessageHeader {
@@ -286,7 +286,7 @@ impl TransactionBuilder {
             let (is_signer, is_writable) = flags
                 .get(pubkey)
                 .copied()
-                .ok_or(SolanaError::InvalidMessage)?;
+                .ok_or(SolanaError::from(CompileError::AccountIndexOverflow))?;
 
             if is_signer || static_only.contains(pubkey) || !lookup_map.contains_key(pubkey) {
                 let bucket = match (is_signer, is_writable) {
@@ -300,7 +300,7 @@ impl TransactionBuilder {
                 let (table_index, entry_index) = lookup_map
                     .get(pubkey)
                     .copied()
-                    .ok_or(SolanaError::InvalidMessage)?;
+                    .ok_or(SolanaError::from(CompileError::AccountIndexOverflow))?;
                 if is_writable {
                     lookup_writable[table_index].push((*pubkey, entry_index));
                 } else {
@@ -324,7 +324,7 @@ impl TransactionBuilder {
         }
 
         if account_keys.len() > u8::MAX as usize {
-            return Err(SolanaError::InvalidMessage);
+            return Err(CompileError::AccountIndexOverflow.into());
         }
 
         let header = MessageHeader {
@@ -340,8 +340,8 @@ impl TransactionBuilder {
                 .flat_map(|entries| entries.iter())
                 .chain(lookup_readonly.iter().flat_map(|entries| entries.iter())),
         ) {
-            let virtual_index =
-                u8::try_from(next_virtual_index).map_err(|_| SolanaError::InvalidMessage)?;
+            let virtual_index = u8::try_from(next_virtual_index)
+                .map_err(|_| SolanaError::from(CompileError::AccountIndexOverflow))?;
             virtual_index_map.insert(*pubkey, virtual_index);
         }
 
@@ -383,7 +383,7 @@ impl TransactionBuilder {
                 let program_id_index = static_index_map
                     .get(&instruction.program_id)
                     .copied()
-                    .ok_or(SolanaError::InvalidMessage)?;
+                    .ok_or(SolanaError::from(CompileError::AccountIndexOverflow))?;
 
                 let accounts = instruction
                     .accounts
@@ -393,7 +393,7 @@ impl TransactionBuilder {
                             .get(&account_meta.pubkey)
                             .copied()
                             .or_else(|| virtual_index_map.get(&account_meta.pubkey).copied())
-                            .ok_or(SolanaError::InvalidMessage)
+                            .ok_or(SolanaError::from(CompileError::AccountIndexOverflow))
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -407,15 +407,15 @@ impl TransactionBuilder {
 
         let signatures = vec![SignatureBytes::default(); header.num_required_signatures as usize];
 
-        Ok(VersionedTransaction::V0 {
+        Ok(VersionedTransaction {
             signatures,
-            message: VersionedMessageV0 {
+            message: VersionedMessage::V0(MessageV0 {
                 header,
                 account_keys,
                 recent_blockhash: self.recent_blockhash,
                 instructions: compiled_instructions,
                 address_table_lookups,
-            },
+            }),
         })
     }
 
@@ -435,8 +435,6 @@ impl TransactionBuilder {
 #[cfg(test)]
 mod tests {
     use super::TransactionBuilder;
-    use crate::Pubkey;
-    use crate::SolanaError;
     use crate::builder::InstructionBuilder;
     use crate::instructions::{
         program_ids::{system_program, token_program},
@@ -447,6 +445,7 @@ mod tests {
     use crate::types::{
         AddressLookupTableAccount, Instruction, SignatureBytes, VersionedTransaction,
     };
+    use crate::{CompileError, Pubkey, SolanaError, VersionedMessage};
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
 
@@ -579,37 +578,9 @@ mod tests {
         tx_builder.add_instruction(instruction.build());
 
         let transaction = tx_builder.build().unwrap();
-        let tx_wire_bytes = transaction.serialize_legacy().unwrap();
-        let deserialized_vt = VersionedTransaction::deserialize_with_version(&tx_wire_bytes)
-            .expect("Failed to deserialize wire bytes into VersionedTransaction");
-
-        let _base64_tx = STANDARD.encode(&tx_wire_bytes);
-
-        match deserialized_vt {
-            VersionedTransaction::Legacy {
-                signatures: deserialized_signatures,
-                message: deserialized_legacy_message,
-            } => {
-                assert_eq!(deserialized_signatures, transaction.signatures);
-                assert_eq!(
-                    deserialized_legacy_message.header,
-                    transaction.message.header
-                );
-                assert_eq!(
-                    deserialized_legacy_message.account_keys,
-                    transaction.message.account_keys
-                );
-                assert_eq!(
-                    deserialized_legacy_message.recent_blockhash,
-                    transaction.message.recent_blockhash
-                );
-                assert_eq!(
-                    deserialized_legacy_message.instructions,
-                    transaction.message.instructions
-                );
-            }
-            _ => panic!("Deserialized transaction is not the expected Legacy variant"),
-        }
+        let tx_wire_bytes = transaction.serialize().unwrap();
+        let deserialized = VersionedTransaction::deserialize(&tx_wire_bytes).unwrap();
+        assert_eq!(deserialized, VersionedTransaction::from(transaction));
     }
 
     #[test]
@@ -667,20 +638,16 @@ mod tests {
 
         let transaction = builder.build_v0(&[]).unwrap();
         let wire_bytes = transaction.serialize().unwrap();
-        let parsed = VersionedTransaction::deserialize_with_version(&wire_bytes).unwrap();
+        let parsed = VersionedTransaction::deserialize(&wire_bytes).unwrap();
+        assert_eq!(parsed, transaction);
 
-        match parsed {
-            VersionedTransaction::V0 {
-                signatures,
-                message,
-            } => {
-                assert_eq!(signatures.len(), 1);
-                assert_eq!(message.header.num_required_signatures, 1);
-                assert!(message.address_table_lookups.is_empty());
-                assert_eq!(message.instructions.len(), 1);
-            }
-            _ => panic!("expected v0 transaction"),
-        }
+        let VersionedMessage::V0(message) = parsed.message else {
+            panic!("expected v0 transaction");
+        };
+        assert_eq!(parsed.signatures.len(), 1);
+        assert_eq!(message.header.num_required_signatures, 1);
+        assert!(message.address_table_lookups.is_empty());
+        assert_eq!(message.instructions.len(), 1);
     }
 
     #[test]
@@ -706,26 +673,19 @@ mod tests {
 
         let transaction = builder.build_v0(&[lookup_table]).unwrap();
         let wire_bytes = transaction.serialize().unwrap();
-        let parsed = VersionedTransaction::deserialize_with_version(&wire_bytes).unwrap();
+        let parsed = VersionedTransaction::deserialize(&wire_bytes).unwrap();
+        assert_eq!(parsed, transaction);
 
-        match parsed {
-            VersionedTransaction::V0 {
-                signatures,
-                message,
-            } => {
-                assert_eq!(signatures.len(), 1);
-                assert_eq!(message.address_table_lookups.len(), 1);
-                assert_eq!(message.address_table_lookups[0].writable_indexes, vec![0]);
-                assert_eq!(
-                    message.address_table_lookups[0].readonly_indexes,
-                    Vec::<u8>::new()
-                );
-                assert!(!message.account_keys.contains(&looked_up_account));
-                assert_eq!(message.instructions.len(), 1);
-                assert_eq!(message.instructions[0].data, vec![1, 2, 3]);
-            }
-            _ => panic!("expected v0 transaction"),
-        }
+        let VersionedMessage::V0(message) = parsed.message else {
+            panic!("expected v0 transaction");
+        };
+        assert_eq!(parsed.signatures.len(), 1);
+        assert_eq!(message.address_table_lookups.len(), 1);
+        assert_eq!(message.address_table_lookups[0].writable_indexes, vec![0]);
+        assert!(message.address_table_lookups[0].readonly_indexes.is_empty());
+        assert!(!message.account_keys.contains(&looked_up_account));
+        assert_eq!(message.instructions.len(), 1);
+        assert_eq!(message.instructions[0].data, vec![1, 2, 3]);
     }
 
     #[test]
@@ -746,7 +706,7 @@ mod tests {
         ]);
         let transaction = builder.build_v0(&[lookup_table]).unwrap();
 
-        let VersionedTransaction::V0 { message, .. } = transaction else {
+        let VersionedMessage::V0(message) = transaction.message else {
             panic!("expected v0 transaction");
         };
         // The nonce account is writable and in the table, but must not be looked up.
@@ -814,17 +774,12 @@ mod tests {
         ];
 
         let wire = STANDARD.decode(REAL_TX_BASE64).unwrap();
-        let mut expected_tx = VersionedTransaction::deserialize_with_version(&wire).unwrap();
-        for signature in expected_tx.signatures_mut() {
+        let mut expected_tx = VersionedTransaction::deserialize(&wire).unwrap();
+        for signature in &mut expected_tx.signatures {
             *signature = SignatureBytes::default();
         }
-
-        let (fee_payer, recent_blockhash) = match &expected_tx {
-            VersionedTransaction::V0 { message, .. } => {
-                (message.account_keys[0], message.recent_blockhash)
-            }
-            _ => panic!("expected V0 transaction fixture"),
-        };
+        let fee_payer = expected_tx.account_keys()[0];
+        let recent_blockhash = *expected_tx.recent_blockhash();
 
         let combined_accounts: Vec<AccountMeta> = STATIC_KEYS
             .iter()
@@ -928,7 +883,10 @@ mod tests {
 
         let result = builder.build();
         assert!(
-            matches!(result, Err(SolanaError::InvalidMessage)),
+            matches!(
+                result,
+                Err(SolanaError::Compile(CompileError::AccountIndexOverflow))
+            ),
             "expected build() to reject 257 distinct accounts with InvalidMessage, got {result:?}"
         );
     }
@@ -964,7 +922,10 @@ mod tests {
 
         let result = builder.build();
         assert!(
-            matches!(result, Err(SolanaError::InvalidMessage)),
+            matches!(
+                result,
+                Err(SolanaError::Compile(CompileError::AccountIndexOverflow))
+            ),
             "expected build() to reject 256 required signers with InvalidMessage, got {result:?}"
         );
     }

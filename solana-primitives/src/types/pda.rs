@@ -23,9 +23,7 @@ pub fn find_program_address(program_id: &Pubkey, seeds: &[&[u8]]) -> Result<(Pub
             return Ok((address, bump));
         }
     }
-    Err(SolanaError::InvalidPubkey(
-        "unable to find a viable program address bump seed".to_string(),
-    ))
+    Err(SolanaError::NoViableBumpSeed)
 }
 
 /// Create a program address from seeds and a bump seed.
@@ -37,24 +35,17 @@ pub fn create_program_address(
     bump_seed: u8,
 ) -> Result<Pubkey> {
     validate_seeds(seeds)?;
-    derive_program_address(program_id, seeds, bump_seed).ok_or_else(|| {
-        SolanaError::InvalidPubkey("resulting address is on curve (invalid PDA)".to_string())
-    })
+    derive_program_address(program_id, seeds, bump_seed).ok_or(SolanaError::InvalidSeeds)
 }
 
 /// Derive an account address from a base pubkey, a seed string, and an owner,
 /// matching `Pubkey::create_with_seed`.
 pub fn create_with_seed(base: &Pubkey, seed: &str, owner: &Pubkey) -> Result<Pubkey> {
     if seed.len() > MAX_SEED_LEN {
-        return Err(SolanaError::InvalidPubkey(format!(
-            "seed too long: {}, max: {MAX_SEED_LEN}",
-            seed.len()
-        )));
+        return Err(SolanaError::InvalidSeeds);
     }
     if owner.as_bytes().ends_with(PDA_MARKER) {
-        return Err(SolanaError::InvalidPubkey(
-            "owner cannot end with the program derived address marker".to_string(),
-        ));
+        return Err(SolanaError::IllegalOwner);
     }
     let hash = Sha256::new()
         .chain_update(base.as_bytes())
@@ -66,18 +57,8 @@ pub fn create_with_seed(base: &Pubkey, seed: &str, owner: &Pubkey) -> Result<Pub
 
 /// Seeds exclude the bump, which takes one of the [`MAX_SEEDS`] slots.
 fn validate_seeds(seeds: &[&[u8]]) -> Result<()> {
-    if seeds.len() >= MAX_SEEDS {
-        return Err(SolanaError::InvalidPubkey(format!(
-            "too many seeds: {}, max: {}",
-            seeds.len(),
-            MAX_SEEDS - 1
-        )));
-    }
-    if let Some(seed) = seeds.iter().find(|seed| seed.len() > MAX_SEED_LEN) {
-        return Err(SolanaError::InvalidPubkey(format!(
-            "seed too long: {}, max: {MAX_SEED_LEN}",
-            seed.len()
-        )));
+    if seeds.len() >= MAX_SEEDS || seeds.iter().any(|seed| seed.len() > MAX_SEED_LEN) {
+        return Err(SolanaError::InvalidSeeds);
     }
     Ok(())
 }
@@ -158,7 +139,10 @@ mod tests {
     fn create_program_address_rejects_on_curve_result() {
         // Upstream `create_program_address([00000000, ff], program)` returns `InvalidSeeds`.
         let seed = [0u8; 4];
-        assert!(create_program_address(&key("pda_program"), &[&seed], 255).is_err());
+        assert_eq!(
+            create_program_address(&key("pda_program"), &[&seed], 255),
+            Err(SolanaError::InvalidSeeds)
+        );
         let (_, bump) = find_program_address(&key("pda_program"), &[&seed]).unwrap();
         assert!(bump < 255);
     }
@@ -170,13 +154,26 @@ mod tests {
         let seeds: Vec<&[u8]> = seeds.iter().map(|s| &s[..]).collect();
 
         // The bump occupies the last slot, so callers get MAX_SEEDS - 1.
-        assert!(find_program_address(&program_id, &seeds).is_err());
-        assert!(create_program_address(&program_id, &seeds, 0).is_err());
+        let invalid = SolanaError::InvalidSeeds;
+        assert_eq!(
+            find_program_address(&program_id, &seeds),
+            Err(invalid.clone())
+        );
+        assert_eq!(
+            create_program_address(&program_id, &seeds, 0),
+            Err(invalid.clone())
+        );
         assert!(find_program_address(&program_id, &seeds[1..]).is_ok());
 
         let too_long = [0u8; MAX_SEED_LEN + 1];
-        assert!(find_program_address(&program_id, &[&too_long]).is_err());
-        assert!(create_program_address(&program_id, &[&too_long], 0).is_err());
+        assert_eq!(
+            find_program_address(&program_id, &[&too_long]),
+            Err(invalid.clone())
+        );
+        assert_eq!(
+            create_program_address(&program_id, &[&too_long], 0),
+            Err(invalid)
+        );
     }
 
     #[test]
@@ -249,10 +246,16 @@ mod tests {
             pubkey("3CzqgepHiVmdbc3owKnm2SiTGX4wpiawznXCN3jsP2jp")
         );
 
-        assert!(create_with_seed(&base, &"x".repeat(MAX_SEED_LEN + 1), &owner).is_err());
+        assert_eq!(
+            create_with_seed(&base, &"x".repeat(MAX_SEED_LEN + 1), &owner),
+            Err(SolanaError::InvalidSeeds)
+        );
 
         let mut marked = [0u8; 32];
         marked[32 - PDA_MARKER.len()..].copy_from_slice(PDA_MARKER);
-        assert!(create_with_seed(&base, "seed", &Pubkey::new(marked)).is_err());
+        assert_eq!(
+            create_with_seed(&base, "seed", &Pubkey::new(marked)),
+            Err(SolanaError::IllegalOwner)
+        );
     }
 }

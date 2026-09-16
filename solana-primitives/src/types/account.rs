@@ -9,7 +9,9 @@ const LOOKUP_TABLE_DISCRIMINANT: u32 = 1;
 
 /// Address lookup table lookup information
 /// Used to describe which addresses in a lookup table to use in a transaction
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
+)]
 pub struct MessageAddressTableLookup {
     /// Address lookup table account key
     pub account_key: Pubkey,
@@ -33,7 +35,9 @@ impl MessageAddressTableLookup {
 }
 
 /// Address lookup table account
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
+)]
 pub struct AddressLookupTableAccount {
     /// The lookup table's public key
     pub key: Pubkey,
@@ -64,22 +68,17 @@ impl AddressLookupTableAccount {
 
     /// Parse an address lookup table account from raw account data.
     pub fn from_account_data(key: Pubkey, data: &[u8]) -> Result<Self> {
-        if data.len() < LOOKUP_TABLE_META_SIZE {
-            return Err(SolanaError::InvalidMessage);
+        let (meta, address_data) = data
+            .split_at_checked(LOOKUP_TABLE_META_SIZE)
+            .ok_or(SolanaError::InvalidAccountData)?;
+        let discriminant = meta.first_chunk().copied().map(u32::from_le_bytes);
+        if discriminant != Some(LOOKUP_TABLE_DISCRIMINANT) {
+            return Err(SolanaError::InvalidAccountData);
         }
 
-        let discriminant = u32::from_le_bytes(
-            data[0..4]
-                .try_into()
-                .map_err(|_| SolanaError::InvalidMessage)?,
-        );
-        if discriminant != LOOKUP_TABLE_DISCRIMINANT {
-            return Err(SolanaError::InvalidMessage);
-        }
-
-        let (chunks, remainder) = data[LOOKUP_TABLE_META_SIZE..].as_chunks::<32>();
+        let (chunks, remainder) = address_data.as_chunks::<32>();
         if !remainder.is_empty() {
-            return Err(SolanaError::InvalidMessage);
+            return Err(SolanaError::InvalidAccountData);
         }
         let addresses = chunks.iter().copied().map(Pubkey::new).collect();
 
@@ -156,7 +155,7 @@ mod tests {
 
         let result = AddressLookupTableAccount::from_account_data(key, &invalid_data);
 
-        assert!(matches!(result, Err(SolanaError::InvalidMessage)));
+        assert!(matches!(result, Err(SolanaError::InvalidAccountData)));
     }
 
     #[test]
@@ -168,6 +167,6 @@ mod tests {
 
         let result = AddressLookupTableAccount::from_account_data(key, &data);
 
-        assert!(matches!(result, Err(SolanaError::InvalidMessage)));
+        assert!(matches!(result, Err(SolanaError::InvalidAccountData)));
     }
 }

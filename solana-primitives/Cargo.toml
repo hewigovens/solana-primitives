@@ -13,7 +13,6 @@ documentation.workspace = true
 ed25519-dalek.workspace = true
 borsh.workspace = true
 bs58.workspace = true
-thiserror.workspace = true
 serde.workspace = true
 sha2.workspace = true
 base64.workspace = true
@@ -21,3 +20,4 @@ hex.workspace = true
 
 [dev-dependencies]
 hexlit.workspace = true
+serde_json.workspace = true
