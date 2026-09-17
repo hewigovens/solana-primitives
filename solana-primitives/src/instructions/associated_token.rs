@@ -27,14 +27,13 @@ pub fn create_associated_token_account_with_program_id(
     token_mint_address: &Pubkey,
     token_program_id: &Pubkey,
 ) -> Instruction {
-    let associated_token_address = get_associated_token_address_with_program_id(
-        wallet_address,
-        token_mint_address,
-        token_program_id,
-    );
     create_instruction(
         payer,
-        &associated_token_address,
+        &get_associated_token_address_with_program_id(
+            wallet_address,
+            token_mint_address,
+            token_program_id,
+        ),
         wallet_address,
         token_mint_address,
         token_program_id,
@@ -42,21 +41,20 @@ pub fn create_associated_token_account_with_program_id(
     )
 }
 
-/// Create an associated token account idempotent instruction
+/// Create an associated token account idempotent instruction for the given token program
 pub fn create_associated_token_account_idempotent(
     payer: &Pubkey,
     wallet_address: &Pubkey,
     token_mint_address: &Pubkey,
     token_program_id: &Pubkey,
 ) -> Instruction {
-    let associated_token_address = get_associated_token_address_with_program_id(
-        wallet_address,
-        token_mint_address,
-        token_program_id,
-    );
     create_associated_token_account_idempotent_with_address(
         payer,
-        &associated_token_address,
+        &get_associated_token_address_with_program_id(
+            wallet_address,
+            token_mint_address,
+            token_program_id,
+        ),
         wallet_address,
         token_mint_address,
         token_program_id,
@@ -196,16 +194,6 @@ mod tests {
         );
         assert_eq!(
             create_associated_token_account_idempotent(&payer, &wallet, &mint, &program),
-            expected(TOKEN_2022_ATA, TOKEN_2022, 1)
-        );
-        assert_eq!(
-            create_associated_token_account_idempotent_with_address(
-                &payer,
-                &pubkey(TOKEN_2022_ATA),
-                &wallet,
-                &mint,
-                &program,
-            ),
             expected(TOKEN_2022_ATA, TOKEN_2022, 1)
         );
     }

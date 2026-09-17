@@ -23,9 +23,6 @@ test:
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
-build:
-    cargo build
-
 example-basic:
     cargo run --example basic
 

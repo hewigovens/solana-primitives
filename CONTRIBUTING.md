@@ -8,30 +8,14 @@
 ## Development loop
 
 ```bash
-cargo fmt
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-cargo test --no-default-features
-cargo test --all-features
+just format      # cargo fmt --all
+just lint        # clippy with default, no-default and all features
+just test        # tests with default, no-default and all features
+just doc         # rustdoc with warnings denied
 ```
 
-Or use `just`:
-
-```bash
-just lint-fix
-just lint
-just fmt-check
-just test
-just doc
-just build
-```
-
-## Running examples
-
-```bash
-cargo run --example basic
-cargo run --example decode_tx
-```
+`just list` shows every recipe, including `example-basic` and `example-decode-tx`.
+CI runs the same checks, so a green `just lint && just test` is a good predictor.
 
 ## Releasing
 

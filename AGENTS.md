@@ -5,20 +5,12 @@ This file provides guidance to Coding Agents (Claude Code, OpenAI Codex, Google 
 ## Common Commands
 
 ### Building and Testing
-- `cargo build` - Build the workspace
-- `cargo test` - Run all tests (default features)
-- `just lint-fix` - Run linter with auto-fixes
-- `just lint` - Run clippy via justfile
 - `just test` - Run tests with default, no default, and all features
+- `just lint` / `just lint-fix` - Run clippy, with or without auto-fixes
 - `just fmt-check` - Check formatting
 - `just doc` - Build rustdoc with warnings denied
-- `just build` - Build via justfile
-
-### Examples
-- `just example-basic` - Run the basic example
-- `just example-decode-tx` - Run the decode transaction example
-- `cargo run --example basic` - Run basic example via Cargo examples
-- `cargo run --example decode_tx` - Run decode transaction example via Cargo examples
+- `just example-basic` / `just example-decode-tx` - Run an example
+- `just list` - Show every recipe
 
 ## Architecture Overview
 
@@ -57,7 +49,7 @@ This crate provides Solana transaction primitives (legacy, v0, and v1/SIMD-0385)
 - Unit tests are co-located with implementation files; shared fixtures live in `src/test_utils/`
 - Wire-format and instruction bytes are checked against golden vectors generated with the Solana SDK (`src/test_utils/vectors.rs`, built from `src/test_utils/scenarios.rs` with keys `sha256(label)`). Self-roundtrips alone are not enough
 - Use `hexlit::hex!` for opaque byte fixtures
-- Examples serve as integration tests demonstrating real usage patterns
+- Examples are compiled by `cargo test` and CI but never run, so they are not assertions
 - Tests must pass with default features, `--no-default-features`, and `--all-features` (`just test`); gate signing-only tests with `cfg(feature = "signing")`
 - CI runs build and tests across a feature matrix, an MSRV check, clippy, rustfmt, and rustdoc on push/PR to main
 

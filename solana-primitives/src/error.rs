@@ -256,5 +256,5 @@ impl From<SanitizeError> for SolanaError {
     }
 }
 
-/// A type alias for Result with SolanaError
+/// A [`std::result::Result`] with [`SolanaError`] as the error type.
 pub type Result<T> = std::result::Result<T, SolanaError>;

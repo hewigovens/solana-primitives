@@ -30,10 +30,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build
-        run: cargo build --all-targets ${{ matrix.features.flags }}
       - name: Run tests
-        run: cargo test ${{ matrix.features.flags }}
+        run: cargo test --all-targets ${{ matrix.features.flags }}
+      - name: Run doctests
+        run: cargo test --doc ${{ matrix.features.flags }}
 
   msrv:
     name: MSRV (1.88)

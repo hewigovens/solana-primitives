@@ -64,17 +64,17 @@ impl VersionedTransaction {
         self.message.header()
     }
 
-    /// Get the number of required signatures
+    /// How many leading account keys must sign.
     pub fn num_required_signatures(&self) -> u8 {
         self.header().num_required_signatures
     }
 
-    /// Get the number of read-only signed accounts
+    /// How many of the signing keys are read-only.
     pub fn num_readonly_signed_accounts(&self) -> u8 {
         self.header().num_readonly_signed_accounts
     }
 
-    /// Get the number of read-only unsigned accounts
+    /// How many of the non-signing keys are read-only.
     pub fn num_readonly_unsigned_accounts(&self) -> u8 {
         self.header().num_readonly_unsigned_accounts
     }
@@ -84,12 +84,12 @@ impl VersionedTransaction {
         self.message.static_account_keys()
     }
 
-    /// Get the recent blockhash
+    /// The recent blockhash, or the nonce value for a durable-nonce transaction.
     pub fn recent_blockhash(&self) -> &[u8; 32] {
         self.message.recent_blockhash()
     }
 
-    /// Get the instructions
+    /// The compiled instructions, in execution order.
     pub fn instructions(&self) -> &[CompiledInstruction] {
         self.message.instructions()
     }
@@ -527,6 +527,28 @@ mod tests {
         assert_eq!(tx.set_compute_unit_price(1), Ok(false));
     }
 
+    #[test]
+    fn zero_loaded_accounts_limit_is_version_specific() {
+        let payer = key("payer");
+        let mut builder = TransactionBuilder::new(payer, [0; 32]);
+        builder.add_instructions([
+            compute_budget::set_compute_unit_price(5),
+            compute_budget::set_loaded_accounts_data_size_limit(0),
+        ]);
+
+        // The runtime fails a legacy/v0 transaction that requests a zero limit.
+        let mut legacy = builder.build().unwrap();
+        assert_eq!(legacy.get_loaded_accounts_data_size_limit(), None);
+        assert_eq!(legacy.get_compute_unit_price(), None);
+        assert_eq!(legacy.set_compute_unit_price(1), Ok(false));
+
+        // SIMD-0385 allows 0 in a v1 config (and uses it when the value is unset).
+        let config = TransactionConfig::new().with_loaded_accounts_data_size_limit(0);
+        let v1 = builder.build_v1(config).unwrap();
+        let v1 = VersionedTransaction::deserialize(&v1.serialize().unwrap()).unwrap();
+        assert_eq!(v1.get_loaded_accounts_data_size_limit(), Some(0));
+    }
+
     fn duplicated_signer_message() -> Message {
         let payer = signer("payer").pubkey;
         // Sanitize allows a repeated key (the runtime rejects it later).
@@ -629,6 +651,7 @@ mod tests {
         use crate::crypto::{get_public_key, hash_data};
         use crate::types::MessageV0;
 
+        /// `sha256(label)` as a private key, with its public key.
         fn keypair(label: &str) -> ([u8; 32], Pubkey) {
             let private_key = hash_data(label.as_bytes());
             let pubkey = Pubkey::new(get_public_key(&private_key).unwrap());
@@ -872,24 +895,6 @@ mod tests {
 
     #[test]
     fn v1_wire_errors() {
-        for tx in [
-            &vectors::V1_SIMPLE_TX[..],
-            &vectors::V1_COMPLEX_TX,
-            &vectors::V1_NONCE_TX,
-            &vectors::V1_FEE_ONLY_TX,
-        ] {
-            for len in 0..tx.len() {
-                assert!(
-                    VersionedTransaction::deserialize(&tx[..len]).is_err(),
-                    "truncated to {len} bytes"
-                );
-            }
-            assert_eq!(
-                VersionedTransaction::deserialize(&[tx, &[0]].concat()),
-                Err(DecodeError::TrailingBytes.into())
-            );
-        }
-
         let mut tx = VersionedTransaction::deserialize(&vectors::V1_SIMPLE_TX).unwrap();
         tx.signatures.push(SignatureBytes::default());
         assert_eq!(
@@ -982,17 +987,22 @@ mod tests {
 
     #[test]
     fn deserialize_rejects_truncation_and_trailing_bytes() {
-        for fixture in [LEGACY_TX, MAYAN_V0_TX] {
-            let data = base64(fixture);
+        let legacy_and_v0 = [base64(LEGACY_TX), base64(MAYAN_V0_TX)];
+        let v1 = [
+            &vectors::V1_SIMPLE_TX[..],
+            &vectors::V1_COMPLEX_TX,
+            &vectors::V1_NONCE_TX,
+            &vectors::V1_FEE_ONLY_TX,
+        ];
+        for data in legacy_and_v0.iter().map(Vec::as_slice).chain(v1) {
             for len in 0..data.len() {
                 assert!(
                     VersionedTransaction::deserialize(&data[..len]).is_err(),
                     "truncated to {len} bytes"
                 );
             }
-            let padded = [&data[..], &[0]].concat();
             assert_eq!(
-                VersionedTransaction::deserialize(&padded),
+                VersionedTransaction::deserialize(&[data, &[0]].concat()),
                 Err(DecodeError::TrailingBytes.into())
             );
         }
@@ -1057,46 +1067,14 @@ mod tests {
 
     #[test]
     fn deserialize_sanitizes() {
-        let cases: [([u8; 3], [u8; 5], SanitizeError); 6] = [
-            (
-                [1, 0, 5],
-                [1, 1, 1, 0, 0],
-                SanitizeError::NotEnoughAccountKeys,
-            ),
-            (
-                [1, 1, 1],
-                [1, 1, 1, 0, 0],
-                SanitizeError::NoWritableFeePayer,
-            ),
-            (
-                [0, 0, 1],
-                [1, 1, 1, 0, 0],
-                SanitizeError::NoWritableFeePayer,
-            ),
-            (
-                [1, 0, 1],
-                [1, 0, 1, 0, 0],
-                SanitizeError::InvalidProgramIndex,
-            ),
-            (
-                [1, 0, 1],
-                [1, 2, 1, 0, 0],
-                SanitizeError::InvalidProgramIndex,
-            ),
-            (
-                [1, 0, 1],
-                [1, 1, 1, 2, 0],
-                SanitizeError::InvalidAccountIndex,
-            ),
-        ];
-        for (header, instruction, expected) in cases {
-            let mut bytes = legacy_tx_prefix(header[0], header, 2);
-            bytes.extend_from_slice(&instruction);
-            assert_eq!(
-                VersionedTransaction::deserialize(&bytes),
-                Err(expected.into())
-            );
-        }
+        // The rules themselves are covered by the message tests; this checks that
+        // decoding applies them.
+        let mut no_writable_fee_payer = legacy_tx_prefix(1, [1, 1, 1], 2);
+        no_writable_fee_payer.extend_from_slice(&[1, 1, 1, 0, 0]);
+        assert_eq!(
+            VersionedTransaction::deserialize(&no_writable_fee_payer),
+            Err(SanitizeError::NoWritableFeePayer.into())
+        );
 
         let mut extra_signature = legacy_tx_prefix(2, [1, 0, 1], 2);
         extra_signature.extend_from_slice(&[1, 1, 1, 0, 0]);

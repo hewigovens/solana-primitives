@@ -7,6 +7,9 @@ use crate::instructions::program_ids::compute_budget_program;
 use crate::instructions::system::is_advance_nonce_instruction;
 use crate::types::Instruction;
 
+/// Heap requests must be a multiple of 1024 within this range.
+const HEAP_FRAME_BYTES: std::ops::RangeInclusive<u32> = 32 * 1024..=256 * 1024;
+
 /// Compute budget instruction discriminant for requesting a heap frame.
 pub const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
 /// Compute budget instruction discriminant for setting compute unit limit.
@@ -40,7 +43,7 @@ impl ComputeBudgetInstruction {
             Self::RequestHeapFrame(value)
             | Self::SetComputeUnitLimit(value)
             | Self::SetLoadedAccountsDataSizeLimit(value) => {
-                data.extend_from_slice(&value.to_le_bytes())
+                data.extend_from_slice(&value.to_le_bytes());
             }
             Self::SetComputeUnitPrice(value) => data.extend_from_slice(&value.to_le_bytes()),
         }
@@ -51,14 +54,11 @@ impl ComputeBudgetInstruction {
     pub fn parse(data: &[u8]) -> Option<Self> {
         let (&discriminant, value) = data.split_first()?;
         let u32_value = || value.first_chunk().copied().map(u32::from_le_bytes);
+        let u64_value = || value.first_chunk().copied().map(u64::from_le_bytes);
         match discriminant {
             REQUEST_HEAP_FRAME_DISCRIMINANT => u32_value().map(Self::RequestHeapFrame),
             SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT => u32_value().map(Self::SetComputeUnitLimit),
-            SET_COMPUTE_UNIT_PRICE_DISCRIMINANT => value
-                .first_chunk()
-                .copied()
-                .map(u64::from_le_bytes)
-                .map(Self::SetComputeUnitPrice),
+            SET_COMPUTE_UNIT_PRICE_DISCRIMINANT => u64_value().map(Self::SetComputeUnitPrice),
             SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT_DISCRIMINANT => {
                 u32_value().map(Self::SetLoadedAccountsDataSizeLimit)
             }
@@ -74,6 +74,19 @@ impl ComputeBudgetInstruction {
             Self::SetLoadedAccountsDataSizeLimit(_) => {
                 SET_LOADED_ACCOUNTS_DATA_SIZE_LIMIT_DISCRIMINANT
             }
+        }
+    }
+
+    /// Whether the runtime accepts the requested value.
+    fn has_valid_value(&self) -> bool {
+        match *self {
+            Self::RequestHeapFrame(bytes) => {
+                bytes.is_multiple_of(1024) && HEAP_FRAME_BYTES.contains(&bytes)
+            }
+            // The runtime fails the transaction with `InvalidLoadedAccountsDataSizeLimit`.
+            // (A v1 config may request 0; only the instruction form is rejected.)
+            Self::SetLoadedAccountsDataSizeLimit(bytes) => bytes != 0,
+            Self::SetComputeUnitLimit(_) | Self::SetComputeUnitPrice(_) => true,
         }
     }
 
@@ -122,23 +135,19 @@ pub fn parse_compute_unit_price_data(data: &[u8]) -> Option<u64> {
     }
 }
 
-/// Heap requests must be a multiple of 1024 within this range.
-const HEAP_FRAME_BYTES: std::ops::RangeInclusive<u32> = 32 * 1024..=256 * 1024;
-
 /// Parse Compute Budget instruction data the way the runtime does, keeping each
 /// instruction's position.
 ///
 /// Returns `None` when the runtime would fail the transaction: an instruction
-/// that doesn't parse, a request kind that appears twice, or an invalid heap size.
+/// that doesn't parse, a request kind that appears twice, an invalid heap size,
+/// or a zero loaded accounts data size limit.
 pub(crate) fn parse_compute_budget_requests<'a>(
     instructions: impl IntoIterator<Item = (usize, &'a [u8])>,
 ) -> Option<Vec<(usize, ComputeBudgetInstruction)>> {
     let mut requests: Vec<(usize, ComputeBudgetInstruction)> = Vec::new();
     for (index, data) in instructions {
         let request = ComputeBudgetInstruction::parse(data)?;
-        if let ComputeBudgetInstruction::RequestHeapFrame(bytes) = request
-            && (!bytes.is_multiple_of(1024) || !HEAP_FRAME_BYTES.contains(&bytes))
-        {
+        if !request.has_valid_value() {
             return None;
         }
         if requests
@@ -155,8 +164,8 @@ pub(crate) fn parse_compute_budget_requests<'a>(
 /// The Compute Budget requests in a list, in order.
 ///
 /// Returns `None` when the runtime would fail the transaction: a Compute Budget
-/// instruction that doesn't parse, a request kind that appears twice, or an
-/// invalid heap size.
+/// instruction that doesn't parse, a request kind that appears twice, an
+/// invalid heap size, or a zero loaded accounts data size limit.
 pub fn compute_budget_instructions(
     instructions: &[Instruction],
 ) -> Option<Vec<ComputeBudgetInstruction>> {
@@ -197,12 +206,14 @@ pub fn get_compute_unit_price(instructions: &[Instruction]) -> Option<u64> {
 /// existing Compute Budget instructions are invalid (see
 /// [`compute_budget_instructions`]).
 pub fn ensure_compute_unit_price(instructions: &mut Vec<Instruction>, micro_lamports: u64) -> bool {
-    match compute_budget_instructions(instructions) {
-        Some(requests)
-            if !requests.iter().any(|request| {
-                matches!(request, ComputeBudgetInstruction::SetComputeUnitPrice(_))
-            }) => {}
-        _ => return false,
+    let Some(requests) = compute_budget_instructions(instructions) else {
+        return false;
+    };
+    if requests
+        .iter()
+        .any(|request| matches!(request, ComputeBudgetInstruction::SetComputeUnitPrice(_)))
+    {
+        return false;
     }
 
     // Durable-nonce txs require AdvanceNonceAccount as instruction 0; insert after it.
@@ -304,6 +315,10 @@ mod tests {
             vec![set_compute_unit_limit(5), set_compute_unit_limit(6)],
             vec![set_compute_unit_limit(5), request_heap_frame(1000)],
             vec![set_compute_unit_limit(5), request_heap_frame(512 * 1024)],
+            vec![
+                set_compute_unit_limit(5),
+                set_loaded_accounts_data_size_limit(0),
+            ],
         ];
         for mut instructions in invalid_lists {
             assert_eq!(compute_budget_instructions(&instructions), None);
@@ -317,12 +332,14 @@ mod tests {
             transfer,
             request_heap_frame(64 * 1024),
             set_compute_unit_limit(5),
+            set_loaded_accounts_data_size_limit(1),
         ];
         assert_eq!(
             compute_budget_instructions(&valid),
             Some(vec![
                 ComputeBudgetInstruction::RequestHeapFrame(64 * 1024),
                 ComputeBudgetInstruction::SetComputeUnitLimit(5),
+                ComputeBudgetInstruction::SetLoadedAccountsDataSizeLimit(1),
             ])
         );
     }

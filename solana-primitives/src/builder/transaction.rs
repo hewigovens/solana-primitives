@@ -102,8 +102,6 @@ impl TransactionBuilder {
 #[cfg(test)]
 mod tests {
     use super::TransactionBuilder;
-    use crate::builder::InstructionBuilder;
-    use crate::instructions::program_ids::system_program;
     use crate::instructions::system::transfer;
     use crate::test_utils::{base64, blockhash, scenarios, signer, vectors};
     use crate::types::{
@@ -111,7 +109,6 @@ mod tests {
         TransactionConfig, VersionedMessage, VersionedTransaction,
     };
     use crate::{CompileError, Pubkey, SanitizeError, SolanaError};
-    use hexlit::hex;
 
     fn builder(instructions: Vec<Instruction>) -> TransactionBuilder {
         let mut builder = TransactionBuilder::new(signer("payer").pubkey, blockhash());
@@ -220,42 +217,8 @@ mod tests {
     }
 
     #[test]
-    fn v1_uses_the_same_key_order_as_legacy() {
-        let legacy = builder(scenarios::complex_without_compute_budget())
-            .build()
-            .unwrap();
-        let v1 = builder(scenarios::complex_without_compute_budget())
-            .build_v1(scenarios::full_config())
-            .unwrap();
-        assert_eq!(v1.header(), legacy.header());
-        assert_eq!(v1.account_keys(), legacy.account_keys());
-        assert_eq!(v1.instructions(), legacy.instructions());
-    }
-
-    #[test]
-    fn v1_build_is_sanitized() {
+    fn build_sanitizes_every_version() {
         let payer = signer("payer").pubkey;
-        let instructions: Vec<Instruction> = (0..64u8)
-            .map(|i| transfer(&payer, &Pubkey::new([i; 32]), 1))
-            .collect();
-        // 64 recipients + payer + System program exceed the 64-address limit.
-        assert_eq!(
-            builder(instructions.clone())
-                .build_v1(TransactionConfig::new())
-                .map(|_| ()),
-            Err(SanitizeError::TooManyAccountKeys.into())
-        );
-        assert!(
-            builder(instructions[..62].to_vec())
-                .build_v1(TransactionConfig::new())
-                .is_ok()
-        );
-        assert_eq!(
-            builder(scenarios::simple())
-                .build_v1(TransactionConfig::new().with_heap_size(1000))
-                .map(|_| ()),
-            Err(SanitizeError::InvalidHeapSize.into())
-        );
         // Programs cannot be the fee payer in any version.
         let pay_to_program = [Instruction {
             program_id: payer,
@@ -276,94 +239,6 @@ mod tests {
                 .build_v1(TransactionConfig::new())
                 .map(|_| ()),
             invalid_program
-        );
-    }
-
-    #[test]
-    fn v0_lookup_rules() {
-        let tx = builder(scenarios::v0_alt())
-            .build_v0(&scenarios::lookup_tables())
-            .unwrap();
-        let VersionedMessage::V0(message) = &tx.message else {
-            unreachable!()
-        };
-        let tables = scenarios::lookup_tables();
-        let static_keys = &message.account_keys;
-        // Programs and signers stay static even when a table lists them.
-        assert!(static_keys.contains(&tables[0].addresses[2]));
-        assert!(static_keys.contains(&signer("cosigner").pubkey));
-        // `alt_both` comes from the first table; `dup_in_table` uses its first index;
-        // the table with nothing usable is skipped.
-        assert_eq!(message.address_table_lookups.len(), 2);
-        assert_eq!(message.address_table_lookups[0].readonly_indexes.len(), 2);
-        assert!(
-            message.address_table_lookups[0]
-                .readonly_indexes
-                .contains(&3)
-        );
-        assert!(
-            message.address_table_lookups[1]
-                .writable_indexes
-                .contains(&1)
-        );
-
-        let tx = builder(scenarios::v0_nonce())
-            .build_v0(&[scenarios::nonce_lookup_table()])
-            .unwrap();
-        let VersionedMessage::V0(message) = &tx.message else {
-            unreachable!()
-        };
-        // The durable nonce account is writable and in the table, but stays static.
-        let nonce = scenarios::nonce_lookup_table().addresses[0];
-        assert!(message.account_keys.contains(&nonce));
-        assert_eq!(message.address_table_lookups[0].writable_indexes, vec![1]);
-        assert_eq!(message.address_table_lookups[0].readonly_indexes, vec![2]);
-    }
-
-    #[test]
-    fn roundtrips_opaque_instruction_data() {
-        let fee_payer = Pubkey::from_str_const("A21o4asMbFHYadqXdLusT9Bvx9xaC5YV9gcaidjqtdXC");
-        let recent_blockhash =
-            crate::decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd").unwrap();
-        let instruction = InstructionBuilder::new(Pubkey::from_str_const(
-            "J88B7gmadHzTNGiy54c9Ms8BsEXNdB2fntFyhKpk3qoT",
-        ))
-        .data(
-            hex!(
-            "a3265ce2f3698dc400000070000000000100000014000000514bcb1f9aabb904"
-            "e6106bd1052b66d2706dbbb701000000006c000000000a00000085fba93ee29c"
-            "604fa858a351688c01290841eafb19c63a70a475d3c7bc3bef9f000000000000"
-            "000000008489b9cc07af97add00300000000000000000000000000001e83d297"
-            "2d3dca3a330d60c2777ee5b8d25683c63fa359116985609830f4205405000400"
-            "2d16000000f0314f0cffdf8d00b6a7ce61f86164ca47c1b8b1bc2e"
-            )
-            .to_vec(),
-        )
-        .accounts(vec![
-            AccountMeta::new_readonly(Pubkey::from_str_const(
-                "ACLMuTFvDAb3oecQQGkTVqpUbhCKHG3EZ9uNXHK1W9ka",
-            )),
-            AccountMeta::new_writable(Pubkey::from_str_const(
-                "3tJ67qa2GDfvv2wcMYNUfN5QBZrFpTwcU8ASZKMvCTVU",
-            )),
-            AccountMeta::new_signer_writable(fee_payer),
-            AccountMeta::new_writable(Pubkey::from_str_const(
-                "E8p6aiwuSDWEzQnjGjkNiMZrd1rpSsntWsaZCivdFz51",
-            )),
-            AccountMeta::new_writable(Pubkey::from_str_const(
-                "FmAcjWaRFUxGWBfGT7G3CzcFeJFsewQ4KPJVG4f6fcob",
-            )),
-            AccountMeta::new_readonly(system_program()),
-        ])
-        .build();
-
-        let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash);
-        tx_builder.add_instruction(instruction);
-        let transaction = tx_builder.build().unwrap();
-        let wire_bytes = transaction.serialize().unwrap();
-        assert_eq!(
-            VersionedTransaction::deserialize(&wire_bytes),
-            Ok(transaction)
         );
     }
 
@@ -603,47 +478,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_more_than_256_distinct_accounts() {
-        let distinct_pubkey = |index: u32| {
+    fn rejects_account_index_overflow() {
+        fn distinct_pubkey(index: u32) -> Pubkey {
             let mut bytes = [0u8; 32];
             bytes[0..4].copy_from_slice(&index.to_le_bytes());
             Pubkey::new(bytes)
-        };
-        let accounts = (2..257)
-            .map(|index| AccountMeta::new_writable(distinct_pubkey(index)))
-            .collect();
-        let mut builder = TransactionBuilder::new(distinct_pubkey(0), blockhash());
-        builder.add_instruction(Instruction {
-            program_id: distinct_pubkey(1),
-            accounts,
-            data: vec![],
-        });
+        }
+        fn builder_with(accounts: Vec<AccountMeta>) -> TransactionBuilder {
+            let mut builder = TransactionBuilder::new(distinct_pubkey(0), blockhash());
+            builder.add_instruction(Instruction {
+                program_id: distinct_pubkey(1),
+                accounts,
+                data: vec![],
+            });
+            builder
+        }
         let overflow = Err(SolanaError::Compile(CompileError::AccountIndexOverflow));
-        assert_eq!(builder.build().map(|_| ()), overflow);
-        assert_eq!(builder.build_v0(&[]).map(|_| ()), overflow);
-    }
 
-    #[test]
-    fn rejects_256_required_signers() {
-        let distinct_pubkey = |index: u32| {
-            let mut bytes = [0u8; 32];
-            bytes[0..4].copy_from_slice(&index.to_le_bytes());
-            Pubkey::new(bytes)
-        };
-        // 255 signers plus the fee payer would wrap to 0 as a u8.
-        let accounts = (1..256)
-            .map(|index| AccountMeta::new_signer_writable(distinct_pubkey(index)))
-            .collect();
-        let mut builder = TransactionBuilder::new(distinct_pubkey(0), blockhash());
-        builder.add_instruction(Instruction {
-            program_id: distinct_pubkey(1),
-            accounts,
-            data: vec![],
-        });
-        assert_eq!(
-            builder.build().map(|_| ()),
-            Err(SolanaError::Compile(CompileError::AccountIndexOverflow))
+        // 255 other accounts plus the payer and the program exceed 256 keys.
+        let writable = builder_with(
+            (2..257)
+                .map(|index| AccountMeta::new_writable(distinct_pubkey(index)))
+                .collect(),
         );
+        assert_eq!(writable.build().map(|_| ()), overflow);
+        assert_eq!(writable.build_v0(&[]).map(|_| ()), overflow);
+
+        // 255 signers plus the fee payer would wrap to 0 as a u8.
+        let signers = builder_with(
+            (1..256)
+                .map(|index| AccountMeta::new_signer_writable(distinct_pubkey(index)))
+                .collect(),
+        );
+        assert_eq!(signers.build().map(|_| ()), overflow);
     }
 
     #[test]

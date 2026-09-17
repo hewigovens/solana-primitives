@@ -7,9 +7,7 @@ fn namespaced_discriminator(namespace: &str, name: &str) -> [u8; 8] {
         .chain_update(b":")
         .chain_update(name)
         .finalize();
-    let mut discriminator = [0u8; 8];
-    discriminator.copy_from_slice(&hash[..8]);
-    discriminator
+    *hash.first_chunk().expect("SHA-256 produces 32 bytes")
 }
 
 /// Return the 8-byte Anchor instruction discriminator for a global instruction name.
@@ -42,22 +40,14 @@ mod tests {
     use hexlit::hex;
 
     #[test]
-    fn test_global_discriminator() {
+    fn discriminators_match_anchor() {
         assert_eq!(global_discriminator("init_order"), hex!("204c290c27a284db"));
-    }
-
-    #[test]
-    fn test_account_discriminator() {
         assert_eq!(account_discriminator("Order"), hex!("86addfb94d561c33"));
-    }
-
-    #[test]
-    fn test_event_discriminator() {
         assert_eq!(event_discriminator("OrderPlaced"), hex!("6082cceaa9dbd8e3"));
     }
 
     #[test]
-    fn test_namespaces_differ_for_same_name() {
+    fn namespaces_differ_for_same_name() {
         let name = "Foo";
         assert_ne!(global_discriminator(name), account_discriminator(name));
         assert_ne!(global_discriminator(name), event_discriminator(name));

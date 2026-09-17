@@ -15,23 +15,19 @@ use crate::types::{
 };
 
 /// High bit of the first message byte marks a versioned message.
-pub(crate) const MESSAGE_VERSION_PREFIX: u8 = 0x80;
+const MESSAGE_VERSION_PREFIX: u8 = 0x80;
 
-pub(crate) const SIGNATURE_LEN: usize = 64;
+const SIGNATURE_LEN: usize = 64;
 const PUBKEY_LEN: usize = 32;
 
 /// A bounds-checked cursor over wire bytes.
-pub(crate) struct WireReader<'a> {
+struct WireReader<'a> {
     bytes: &'a [u8],
 }
 
 impl<'a> WireReader<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes }
-    }
-
-    pub fn remaining(&self) -> usize {
-        self.bytes.len()
     }
 
     pub fn peek_u8(&self) -> Result<u8, DecodeError> {
@@ -85,7 +81,7 @@ impl<'a> WireReader<'a> {
     /// rejecting counts the remaining input cannot hold before anything is allocated.
     pub fn read_count(&mut self, min_item_len: usize) -> Result<usize, DecodeError> {
         let count = usize::from(self.read_short_u16()?);
-        if count * min_item_len > self.remaining() {
+        if count * min_item_len > self.bytes.len() {
             return Err(DecodeError::UnexpectedEof);
         }
         Ok(count)
@@ -129,12 +125,8 @@ impl<'a> WireReader<'a> {
 }
 
 /// Append a compact-u16 length.
-pub(crate) fn write_short_len(out: &mut Vec<u8>, len: usize) -> Result<(), EncodeError> {
-    let value = u16::try_from(len).map_err(|_| EncodeError::LengthOverflow {
-        len,
-        max: u16::MAX.into(),
-    })?;
-    let (bytes, n) = short_vec::encode(value);
+fn write_short_len(out: &mut Vec<u8>, len: usize) -> Result<(), EncodeError> {
+    let (bytes, n) = short_vec::encode(u16_len(len)?);
     out.extend_from_slice(&bytes[..n]);
     Ok(())
 }
@@ -145,7 +137,7 @@ fn write_short_vec_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), EncodeEr
     Ok(())
 }
 
-pub(crate) fn write_header(out: &mut Vec<u8>, header: &MessageHeader) {
+fn write_header(out: &mut Vec<u8>, header: &MessageHeader) {
     out.extend_from_slice(&[
         header.num_required_signatures,
         header.num_readonly_signed_accounts,
@@ -153,13 +145,13 @@ pub(crate) fn write_header(out: &mut Vec<u8>, header: &MessageHeader) {
     ]);
 }
 
-pub(crate) fn write_pubkeys(out: &mut Vec<u8>, keys: &[Pubkey]) {
+fn write_pubkeys(out: &mut Vec<u8>, keys: &[Pubkey]) {
     for key in keys {
         out.extend_from_slice(key.as_bytes());
     }
 }
 
-pub(crate) fn read_header(reader: &mut WireReader) -> Result<MessageHeader, DecodeError> {
+fn read_header(reader: &mut WireReader) -> Result<MessageHeader, DecodeError> {
     let [
         num_required_signatures,
         num_readonly_signed_accounts,
@@ -249,7 +241,12 @@ pub(crate) fn write_v0_message(out: &mut Vec<u8>, message: &MessageV0) -> Result
 }
 
 fn read_v0_message(reader: &mut WireReader) -> Result<MessageV0, DecodeError> {
-    let body = read_message_body(reader)?;
+    let Message {
+        header,
+        account_keys,
+        recent_blockhash,
+        instructions,
+    } = read_message_body(reader)?;
     // key + two lengths
     let num_lookups = reader.read_count(PUBKEY_LEN + 2)?;
     let address_table_lookups = (0..num_lookups)
@@ -262,10 +259,10 @@ fn read_v0_message(reader: &mut WireReader) -> Result<MessageV0, DecodeError> {
         })
         .collect::<Result<_, DecodeError>>()?;
     Ok(MessageV0 {
-        header: body.header,
-        account_keys: body.account_keys,
-        recent_blockhash: body.recent_blockhash,
-        instructions: body.instructions,
+        header,
+        account_keys,
+        recent_blockhash,
+        instructions,
         address_table_lookups,
     })
 }
@@ -274,6 +271,13 @@ fn u8_len(len: usize) -> Result<u8, EncodeError> {
     u8::try_from(len).map_err(|_| EncodeError::LengthOverflow {
         len,
         max: u8::MAX.into(),
+    })
+}
+
+fn u16_len(len: usize) -> Result<u16, EncodeError> {
+    u16::try_from(len).map_err(|_| EncodeError::LengthOverflow {
+        len,
+        max: u16::MAX.into(),
     })
 }
 
@@ -304,11 +308,7 @@ pub(crate) fn write_v1_message(out: &mut Vec<u8>, message: &MessageV1) -> Result
 
     // All fixed-size instruction headers come before any payload.
     for instruction in &message.instructions {
-        let data_len =
-            u16::try_from(instruction.data.len()).map_err(|_| EncodeError::LengthOverflow {
-                len: instruction.data.len(),
-                max: u16::MAX.into(),
-            })?;
+        let data_len = u16_len(instruction.data.len())?;
         out.push(instruction.program_id_index);
         out.push(u8_len(instruction.accounts.len())?);
         out.extend_from_slice(&data_len.to_le_bytes());
@@ -386,7 +386,7 @@ pub(crate) fn write_message(
     }
 }
 
-pub(crate) fn read_message(reader: &mut WireReader) -> Result<VersionedMessage, DecodeError> {
+fn read_message(reader: &mut WireReader) -> Result<VersionedMessage, DecodeError> {
     let first = reader.peek_u8()?;
     if first & MESSAGE_VERSION_PREFIX == 0 {
         return read_message_body(reader).map(VersionedMessage::Legacy);
@@ -453,25 +453,22 @@ pub(crate) fn encode_transaction(
 pub(crate) fn decode_transaction(bytes: &[u8]) -> Result<VersionedTransaction, DecodeError> {
     let mut reader = WireReader::new(bytes);
     let discriminator = reader.read_u8()?;
-    if discriminator == v1::VERSION_PREFIX {
+    let (signatures, message) = if discriminator == v1::VERSION_PREFIX {
         // The signature count comes from the message header.
         let message = read_v1_message(&mut reader)?;
         let signatures = reader.read_signatures(message.header.num_required_signatures.into())?;
-        reader.finish()?;
-        return Ok(VersionedTransaction {
-            signatures,
-            message: VersionedMessage::V1(message),
-        });
-    }
-    if discriminator & MESSAGE_VERSION_PREFIX != 0 {
+        (signatures, VersionedMessage::V1(message))
+    } else if discriminator & MESSAGE_VERSION_PREFIX != 0 {
         return Err(DecodeError::InvalidTransactionDiscriminator(discriminator));
-    }
-    // With the high bit clear, the byte is a complete one-byte compact-u16.
-    let signatures = reader.read_signatures(discriminator.into())?;
-    let message = read_message(&mut reader)?;
-    if matches!(message, VersionedMessage::V1(_)) {
-        return Err(DecodeError::UnexpectedVersion);
-    }
+    } else {
+        // With the high bit clear, the byte is a complete one-byte compact-u16.
+        let signatures = reader.read_signatures(discriminator.into())?;
+        let message = read_message(&mut reader)?;
+        if matches!(message, VersionedMessage::V1(_)) {
+            return Err(DecodeError::UnexpectedVersion);
+        }
+        (signatures, message)
+    };
     reader.finish()?;
     Ok(VersionedTransaction {
         signatures,

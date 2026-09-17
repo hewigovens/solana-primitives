@@ -79,7 +79,7 @@ fn derive_program_address(program_id: &Pubkey, seeds: &[&[u8]], bump: u8) -> Opt
 }
 
 /// Whether `bytes` decompress to an Ed25519 point, matching Solana's `bytes_are_curve_point`.
-pub(crate) fn is_on_curve(bytes: &[u8; 32]) -> bool {
+fn is_on_curve(bytes: &[u8; 32]) -> bool {
     CompressedEdwardsY(*bytes).decompress().is_some()
 }
 

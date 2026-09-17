@@ -133,7 +133,7 @@ println!("CU limit: {:?}", transaction.get_compute_unit_limit());
 transaction.verify()?;
 ```
 
-Compute budget getters report what the runtime would apply: they return `None` when the Compute Budget instructions would fail the transaction (an unparsable or repeated request). Setters clear signatures when they change the message.
+Compute budget getters report what the runtime would apply: they return `None` when the Compute Budget instructions would fail the transaction (an unparsable or repeated request, an invalid heap size, or a zero loaded accounts data size limit). Setters clear signatures when they change the message.
 
 `deserialize` rejects truncated input, trailing bytes, non-canonical lengths, unknown versions and config bits, oversized transactions (1232 bytes for legacy/v0, 4096 for v1), and anything that fails `sanitize()`.
 

@@ -1,5 +1,5 @@
 use crate::compiler::{CompiledKeys, compile_instructions};
-use crate::error::{Result, SanitizeError, SolanaError};
+use crate::error::{Result, SanitizeError};
 use crate::types::v1::{MessageV1, TransactionConfig};
 use crate::types::{
     AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
@@ -8,13 +8,8 @@ use crate::wire;
 
 /// Decode a base58 blockhash (as returned by `getLatestBlockhash`) or durable nonce value.
 pub fn decode_blockhash(blockhash: &str) -> Result<[u8; 32]> {
-    let bytes = bs58::decode(blockhash)
-        .into_vec()
-        .map_err(|_| SolanaError::InvalidBase58)?;
-    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| SolanaError::InvalidLength {
-        expected: 32,
-        actual: bytes.len(),
-    })
+    // Blockhashes are 32 base58 bytes, like a pubkey.
+    Pubkey::from_base58(blockhash).map(Pubkey::to_bytes)
 }
 
 /// Account indexes are `u8`, so a message can reference at most 256 accounts.
@@ -98,7 +93,7 @@ pub struct Message {
 pub type LegacyMessage = Message;
 
 impl Message {
-    /// Create a new message
+    /// Assemble a message from already-compiled parts.
     pub fn new(
         header: MessageHeader,
         account_keys: Vec<Pubkey>,
@@ -132,17 +127,17 @@ impl Message {
         })
     }
 
-    /// Get the number of required signatures
+    /// How many leading account keys must sign.
     pub fn num_required_signatures(&self) -> u8 {
         self.header.num_required_signatures
     }
 
-    /// Get the number of read-only signed accounts
+    /// How many of the signing keys are read-only.
     pub fn num_readonly_signed_accounts(&self) -> u8 {
         self.header.num_readonly_signed_accounts
     }
 
-    /// Get the number of read-only unsigned accounts
+    /// How many of the non-signing keys are read-only.
     pub fn num_readonly_unsigned_accounts(&self) -> u8 {
         self.header.num_readonly_unsigned_accounts
     }
@@ -377,11 +372,6 @@ impl VersionedMessage {
         self.static_account_keys().first()
     }
 
-    /// Whether the account at `index` must sign.
-    pub fn is_signer(&self, index: usize) -> bool {
-        index < usize::from(self.header().num_required_signatures)
-    }
-
     /// Serialize to wire bytes. These are the bytes that get signed.
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
@@ -409,7 +399,7 @@ impl VersionedMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::DecodeError;
+    use crate::error::{DecodeError, SolanaError};
 
     fn header(
         num_required_signatures: u8,

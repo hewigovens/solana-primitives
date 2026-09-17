@@ -95,7 +95,7 @@ mod tests {
     use crate::types::Pubkey;
 
     #[test]
-    fn test_address_lookup_table_account() {
+    fn constructor_keeps_key_and_addresses() {
         let key = Pubkey::new([1; 32]);
         let addresses = vec![
             Pubkey::new([2; 32]),
@@ -117,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn test_message_address_table_lookup() {
+    fn lookup_keeps_key_and_indexes() {
         let key = Pubkey::new([1; 32]);
         let writable_indexes = vec![0, 1];
         let readonly_indexes = vec![2];
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn test_address_lookup_table_from_account_data() {
+    fn parses_account_data() {
         let key = Pubkey::new([9; 32]);
         let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
         data[0..4].copy_from_slice(&LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());
@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn test_address_lookup_table_from_account_data_rejects_invalid_length() {
+    fn rejects_invalid_length() {
         let key = Pubkey::new([9; 32]);
         let invalid_data = vec![0u8; LOOKUP_TABLE_META_SIZE + 1];
 
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn test_address_lookup_table_from_account_data_rejects_invalid_discriminant() {
+    fn rejects_invalid_discriminant() {
         let key = Pubkey::new([9; 32]);
         let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
         data[0..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
@@ -168,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn test_address_lookup_table_from_account_data_checks_authority_tag() {
+    fn rejects_invalid_authority_tag() {
         let key = Pubkey::new([9; 32]);
         let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
         data[0..4].copy_from_slice(&LOOKUP_TABLE_DISCRIMINANT.to_le_bytes());

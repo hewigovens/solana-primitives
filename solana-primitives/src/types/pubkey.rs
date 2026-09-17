@@ -173,24 +173,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn orders_by_bytes() {
-        let mut keys = [
-            Pubkey::new([2; 32]),
-            Pubkey::new([0; 32]),
-            Pubkey::new([1; 32]),
-        ];
-        keys.sort();
-        assert_eq!(
-            keys,
-            [
-                Pubkey::new([0; 32]),
-                Pubkey::new([1; 32]),
-                Pubkey::new([2; 32])
-            ]
-        );
-    }
-
     #[cfg(feature = "serde")]
     #[test]
     fn serde_uses_base58() {

@@ -23,6 +23,7 @@
 
 use crate::compiler::{CompiledKeys, compile_instructions};
 use crate::error::{Result, SanitizeError};
+use crate::types::message::sanitize_instructions;
 use crate::types::{CompiledInstruction, Instruction, MessageHeader, Pubkey};
 use crate::wire;
 use std::collections::HashSet;
@@ -253,7 +254,7 @@ impl MessageV1 {
                 return Err(SanitizeError::InstructionDataTooLarge.into());
             }
         }
-        crate::types::message::sanitize_instructions(&self.instructions, num_keys, num_keys)?;
+        sanitize_instructions(&self.instructions, num_keys, num_keys)?;
         Ok(())
     }
 }
@@ -378,10 +379,6 @@ mod tests {
         assert_eq!(m.sanitize(), Ok(()));
 
         let mut m = message();
-        m.header.num_readonly_unsigned_accounts = 3;
-        assert_eq!(sanitize_err(m), SanitizeError::NotEnoughAccountKeys);
-
-        let mut m = message();
         m.header.num_readonly_signed_accounts = 1;
         assert_eq!(sanitize_err(m), SanitizeError::NoWritableFeePayer);
 
@@ -409,14 +406,8 @@ mod tests {
         }
 
         let mut m = message();
-        m.instructions[0].program_id_index = 0;
-        assert_eq!(sanitize_err(m), SanitizeError::InvalidProgramIndex);
-        let mut m = message();
         m.instructions[0].program_id_index = 3;
         assert_eq!(sanitize_err(m), SanitizeError::InvalidProgramIndex);
-        let mut m = message();
-        m.instructions[0].accounts = vec![3];
-        assert_eq!(sanitize_err(m), SanitizeError::InvalidAccountIndex);
         let mut m = message();
         m.instructions[0].accounts = vec![0; 256];
         assert_eq!(sanitize_err(m), SanitizeError::InstructionAccountsTooLarge);

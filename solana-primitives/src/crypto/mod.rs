@@ -72,24 +72,23 @@ pub fn hash_data(data: &[u8]) -> [u8; 32] {
 #[cfg(all(test, feature = "signing"))]
 mod tests {
     use super::*;
-    use crate::test_utils::key;
+    use crate::test_utils::{key, signer};
     use hexlit::hex;
 
     #[test]
     fn key_derivation_and_signatures() {
-        let private_key = crate::crypto::hash_data(b"payer");
+        let payer = signer("payer");
+        let private_key = payer.private_key;
         let public_key = get_public_key(&private_key).unwrap();
-        assert_eq!(
-            Pubkey::new(public_key).to_base58(),
-            "ECbPvoRPTunYYuu6iCP8gK4GzGX4nc5rPsUpAKoT6vV4"
-        );
+        assert_eq!(Pubkey::new(public_key), payer.pubkey);
         assert_eq!(
             get_address(&private_key).unwrap(),
             get_address_from_public_key(&public_key).unwrap()
         );
+        assert_eq!(get_address(&private_key).unwrap(), payer.pubkey.to_base58());
 
         let signature = sign_message(&private_key, b"hello").unwrap();
-        let pubkey = Pubkey::new(public_key);
+        let pubkey = payer.pubkey;
         assert_eq!(verify_signature(&pubkey, b"hello", &signature), Ok(()));
         assert_eq!(
             verify_signature(&pubkey, b"hullo", &signature),
@@ -122,12 +121,12 @@ mod tests {
 
     #[test]
     fn rejects_non_canonical_s() {
-        let private_key = crate::crypto::hash_data(b"payer");
-        let pubkey = Pubkey::new(get_public_key(&private_key).unwrap());
-        let signature = sign_message(&private_key, b"hello").unwrap();
+        let signer = signer("payer");
+        let (private_key, pubkey) = (signer.private_key, signer.pubkey);
         // s + l encodes the same scalar, but only the reduced form is accepted.
         const L: [u8; 32] =
             hex!("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010");
+        let signature = sign_message(&private_key, b"hello").unwrap();
         let mut bytes = *signature.as_bytes();
         let mut carry = 0u16;
         for (byte, l) in bytes[32..].iter_mut().zip(L) {

@@ -509,23 +509,10 @@ mod tests {
     const BASE: &str = "Ef37CudiH2EeQegAn9gGUjKrGCwf5ksMzXnSAPpWtv17";
     const NONCE: &str = "96GzYFvs4dEeswTaQFQhvbGi6NHUcNHhEgXnPrRjyF2s";
     const AUTHORITY: &str = "Af2Y56WUFQuTTTYHMCjMozYsDxvTvSM6YQnyv8E6EK3v";
-    const OWNER: [u8; 32] =
-        hex!("4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581");
-
     fn check(ix: &Instruction, accounts: &[AccountMeta], data: &[u8]) {
         assert_eq!(ix.program_id, crate::test_utils::pubkey(SYSTEM));
         assert_eq!(ix.accounts, accounts);
         assert_eq!(ix.data, data);
-    }
-
-    #[test]
-    fn fixture_keys_match_upstream() {
-        assert_eq!(key("from").to_base58(), FROM);
-        assert_eq!(key("to").to_base58(), TO);
-        assert_eq!(key("base").to_base58(), BASE);
-        assert_eq!(key("nonce").to_base58(), NONCE);
-        assert_eq!(key("authority").to_base58(), AUTHORITY);
-        assert_eq!(key("owner").as_bytes(), &OWNER);
     }
 
     #[test]

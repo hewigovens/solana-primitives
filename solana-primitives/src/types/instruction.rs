@@ -39,22 +39,22 @@ impl AccountMeta {
         }
     }
 
-    /// Create a new AccountMeta that is read-only
+    /// A read-only account that does not sign.
     pub fn new_readonly(pubkey: Pubkey) -> Self {
         Self::new(pubkey, false, false)
     }
 
-    /// Create a new AccountMeta that is a signer
+    /// A read-only account that signs.
     pub fn new_signer(pubkey: Pubkey) -> Self {
         Self::new(pubkey, true, false)
     }
 
-    /// Create a new AccountMeta that is writable
+    /// A writable account that does not sign.
     pub fn new_writable(pubkey: Pubkey) -> Self {
         Self::new(pubkey, false, true)
     }
 
-    /// Create a new AccountMeta that is both a signer and writable
+    /// A writable account that signs.
     pub fn new_signer_writable(pubkey: Pubkey) -> Self {
         Self::new(pubkey, true, true)
     }

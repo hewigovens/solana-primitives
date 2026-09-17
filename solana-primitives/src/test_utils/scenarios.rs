@@ -199,7 +199,7 @@ pub fn random_cases() -> Vec<RandomCase> {
                 let authority = pick(&mut rng);
                 instructions.push(system::advance_nonce_account(&nonce, &authority));
             }
-            for _ in 0..1 + rng.below(5) {
+            for _ in 0..=rng.below(5) {
                 let program_id = if rng.chance(10) {
                     system_program()
                 } else {
