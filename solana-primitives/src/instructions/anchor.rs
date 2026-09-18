@@ -1,14 +1,13 @@
 use sha2::{Digest, Sha256};
 
+/// The first 8 bytes of `sha256("{namespace}:{name}")`.
 fn namespaced_discriminator(namespace: &str, name: &str) -> [u8; 8] {
-    let mut hasher = Sha256::new();
-    hasher.update(namespace.as_bytes());
-    hasher.update(b":");
-    hasher.update(name.as_bytes());
-    let hash = hasher.finalize();
-    let mut data = [0u8; 8];
-    data.copy_from_slice(&hash[..8]);
-    data
+    let hash = Sha256::new()
+        .chain_update(namespace)
+        .chain_update(b":")
+        .chain_update(name)
+        .finalize();
+    *hash.first_chunk().expect("SHA-256 produces 32 bytes")
 }
 
 /// Return the 8-byte Anchor instruction discriminator for a global instruction name.
@@ -38,33 +37,17 @@ pub fn event_discriminator(name: &str) -> [u8; 8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hexlit::hex;
 
     #[test]
-    fn test_global_discriminator() {
-        assert_eq!(
-            global_discriminator("init_order"),
-            [0x20, 0x4c, 0x29, 0x0c, 0x27, 0xa2, 0x84, 0xdb]
-        );
+    fn discriminators_match_anchor() {
+        assert_eq!(global_discriminator("init_order"), hex!("204c290c27a284db"));
+        assert_eq!(account_discriminator("Order"), hex!("86addfb94d561c33"));
+        assert_eq!(event_discriminator("OrderPlaced"), hex!("6082cceaa9dbd8e3"));
     }
 
     #[test]
-    fn test_account_discriminator() {
-        assert_eq!(
-            account_discriminator("Order"),
-            [0x86, 0xad, 0xdf, 0xb9, 0x4d, 0x56, 0x1c, 0x33]
-        );
-    }
-
-    #[test]
-    fn test_event_discriminator() {
-        assert_eq!(
-            event_discriminator("OrderPlaced"),
-            [0x60, 0x82, 0xcc, 0xea, 0xa9, 0xdb, 0xd8, 0xe3]
-        );
-    }
-
-    #[test]
-    fn test_namespaces_differ_for_same_name() {
+    fn namespaces_differ_for_same_name() {
         let name = "Foo";
         assert_ne!(global_discriminator(name), account_discriminator(name));
         assert_ne!(global_discriminator(name), event_discriminator(name));

@@ -2,32 +2,20 @@
 
 ## Requirements
 
-- Rust stable toolchain (2024 edition)
+- Rust 1.88 or newer (2024 edition)
 - `just` (optional)
 
 ## Development loop
 
 ```bash
-cargo fmt
-cargo clippy -- -D warnings
-cargo test
+just format      # cargo fmt --all
+just lint        # clippy with default, no-default and all features
+just test        # tests with default, no-default and all features
+just doc         # rustdoc with warnings denied
 ```
 
-Or use `just`:
-
-```bash
-just lint-fix
-just lint
-just test
-just build
-```
-
-## Running examples
-
-```bash
-cargo run --example basic
-cargo run --example decode_tx
-```
+`just list` shows every recipe, including `example-basic` and `example-decode-tx`.
+CI runs the same checks, so a green `just lint && just test` is a good predictor.
 
 ## Releasing
 

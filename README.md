@@ -5,149 +5,180 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hewigovens/solana-primitives)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A lightweight Rust crate providing fundamental Solana blockchain primitives for constructing and submitting transactions without requiring the full Solana SDK.
+A lightweight Rust crate for building, signing, serializing, and parsing Solana transactions without the full Solana SDK.
 
 ## Features
 
-- **Core Solana Types**: `Pubkey`, `Signature`, `Instruction`, `Transaction`, `Message`
-- **Builder Pattern APIs**: Fluent `TransactionBuilder` and `InstructionBuilder` with automatic account management
-- **Instruction Data Builder**: Type-safe `InstructionDataBuilder` for constructing instruction payloads
-- **Program Helpers**: Pre-built instructions for System, Token, and other common programs
-- **Program ID Utilities**: Helper functions for common program IDs (System, Token, Token 2022, etc.)
-- **PDA Support**: Program Derived Address generation and validation
-- **Error Handling**: Comprehensive error types with detailed context messages
-- **Lightweight**: Minimal dependencies for reduced bloat
+- **All transaction versions**: legacy, v0 (address lookup tables), and v1 ([SIMD-0385](https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0385-transaction-v1.md): transactions up to 4096 bytes, compute budget in the message config)
+- **Core types**: `Pubkey`, `SignatureBytes`, `Instruction`, `AccountMeta`, `Message`, `MessageV0`, `MessageV1`, `VersionedMessage`, and one `VersionedTransaction` type for every version
+- **Builders**: `TransactionBuilder` merges account roles and orders keys the same way the Solana SDK does; `InstructionBuilder` and `InstructionDataBuilder` for custom instructions
+- **Strict wire codec**: canonical compact-u16 lengths, no trailing bytes, per-version size limits, and Solana's sanitization rules on every `deserialize`
+- **Signing and verification** for every version, or attach signatures made elsewhere (hardware wallets, remote signers)
+- **Program helpers**: System, SPL Token (and Token-2022), Associated Token Account, Compute Budget, Memo, Anchor discriminators
+- **PDAs**: `find_program_address`, `create_program_address`, `create_with_seed`
+- **Verified encodings**: golden vectors generated with the Solana SDK (`solana-message` 5.0, `solana-transaction` 5.0, `solana-system-interface`, `spl-token-interface`, `spl-associated-token-account-interface`)
+- **Small dependency footprint**: `bs58`, `sha2`, and `curve25519-dalek`, plus `ed25519-dalek` for the default `signing` feature
 
 ## Usage
 
-Add this to your `Cargo.toml`:
-
 ```toml
 [dependencies]
-solana-primitives = "0.2.6"
+solana-primitives = "0.3"
 ```
 
-### Quick Start
+Optional features:
+
+| Feature | Adds |
+|---|---|
+| `signing` (default) | Ed25519 key derivation, `sign`/`partial_sign`/`verify` via `ed25519-dalek`. Disable it if you sign elsewhere. |
+| `serde` | Serde for the Rust data model (pubkeys and signatures as base58 strings). Not the transaction wire format. |
+| `borsh` | Borsh for `Pubkey` and `SignatureBytes`. Not the transaction wire format. |
+
+Use `serialize()` / `deserialize()` for the bytes you send to or receive from the network.
+
+### Legacy transaction
 
 ```rust
 use solana_primitives::{
-    Pubkey, InstructionBuilder, InstructionDataBuilder, TransactionBuilder,
-    instructions::program_ids::system_program,
-    instructions::system::transfer,
+    InstructionBuilder, InstructionDataBuilder, Pubkey, TransactionBuilder, decode_blockhash,
+    get_public_key,
+    instructions::{program_ids::system_program, system::transfer},
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let fee_payer = Pubkey::from_base58("11111111111111111111111111111111")?;
-    let recipient = Pubkey::from_base58("22222222222222222222222222222222")?;
-    let recent_blockhash = [0u8; 32]; // In practice, get this from RPC
+fn main() -> solana_primitives::Result<()> {
+    let private_key = [7u8; 32];
+    let fee_payer = Pubkey::new(get_public_key(&private_key)?);
+    let recipient = Pubkey::from_base58("4fYNw3dojWmQ4dXtSGE9epjRGy9uFrCRgbvGgQBNZCQF")?;
+    // The base58 blockhash from `getLatestBlockhash`.
+    let recent_blockhash = decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd")?;
 
-    // Method 1: Using pre-built instruction helpers
-    let transfer_instruction = transfer(&fee_payer, &recipient, 1_000_000); // 0.001 SOL
+    // A pre-built instruction...
+    let transfer_instruction = transfer(&fee_payer, &recipient, 1_000_000);
 
-    // Method 2: Using InstructionBuilder with InstructionDataBuilder
+    // ...or a hand-built one. System instructions use a u32 discriminant.
     let custom_instruction = InstructionBuilder::new(system_program())
-        .account(fee_payer, true, true)  // signer + writable
-        .account(recipient, false, true) // writable
-        .data(
-            InstructionDataBuilder::new()
-                .instruction(2)     // Transfer instruction discriminant
-                .u64(1_000_000)     // Amount in lamports
-                .build()
-        )
+        .account(fee_payer, true, true)
+        .account(recipient, false, true)
+        .data(InstructionDataBuilder::new().u32(2).u64(1_000_000).build())
         .build();
+    assert_eq!(custom_instruction, transfer_instruction);
 
-    // Build transaction
-    let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash);
-    tx_builder.add_instruction(transfer_instruction);
+    let mut builder = TransactionBuilder::new(fee_payer, recent_blockhash);
+    builder.add_instruction(transfer_instruction);
+    let mut transaction = builder.build()?;
 
-    let transaction = tx_builder.build()?;
-    println!("Transaction created with {} instructions", transaction.message.instructions.len());
-
+    transaction.sign(&[&private_key])?;
+    transaction.validate_size()?;
+    let wire_bytes = transaction.serialize()?; // base64-encode for `sendTransaction`
     Ok(())
 }
 ```
 
-### Advanced Usage
+### Signing elsewhere
 
-#### Versioned (V0) Transactions with Lookup Tables
+With or without the `signing` feature, sign the message bytes with your own key
+store and attach each signature to its signer's slot:
 
 ```rust
-use solana_primitives::{
-    AddressLookupTableAccount, Pubkey, TransactionBuilder,
-    instructions::system::transfer,
-};
-
-let fee_payer = Pubkey::new([1u8; 32]);
-let recipient = Pubkey::new([2u8; 32]);
-let looked_up = Pubkey::new([3u8; 32]);
-let recent_blockhash = [9u8; 32];
-
-let mut tx_builder = TransactionBuilder::new(fee_payer, recent_blockhash);
-tx_builder.add_instructions(vec![transfer(&fee_payer, &recipient, 1_000)]);
-let address_lookup_tables = vec![AddressLookupTableAccount::new(
-    Pubkey::new([4u8; 32]),
-    vec![looked_up],
-)];
-
-let tx = tx_builder.build_v0(&address_lookup_tables)?;
-let wire_bytes = tx.serialize()?;
+let mut transaction = builder.build()?;
+let message = transaction.serialize_message()?;
+let signature = hardware_wallet.sign(&message)?; // any Ed25519 signer
+transaction.add_signature(&fee_payer, SignatureBytes::new(signature))?;
+assert!(transaction.is_signed());
 ```
 
-#### Program Derived Addresses (PDAs)
+### v1 transaction
+
+v1 carries compute budget requests in `TransactionConfig`; Compute Budget instructions are ignored by the runtime. Unset values mean **zero** (heap defaults to 32 KiB), so set the compute unit limit and the loaded accounts data size limit explicitly. The priority fee is a **total in lamports**, not a per-unit price.
 
 ```rust
-use solana_primitives::{find_program_address, Pubkey};
+use solana_primitives::{TransactionBuilder, TransactionConfig};
 
-let program_id = Pubkey::from_base58("YourProgramId11111111111111111111111111")?;
-let seeds = [b"your_seed", b"another_seed"];
-let seed_refs: Vec<&[u8]> = seeds.iter().map(|s| s.as_ref()).collect();
-
-let (pda, bump) = find_program_address(&program_id, &seed_refs)?;
-println!("PDA: {}, Bump: {}", pda.to_base58(), bump);
+let config = TransactionConfig::new()
+    .with_compute_unit_limit(200_000)
+    .with_loaded_accounts_data_size_limit(64 * 1024)
+    .with_priority_fee(5_000);
+let mut transaction = builder.build_v1(config)?;
+transaction.sign(&[&private_key])?;
+let wire_bytes = transaction.serialize()?; // `0x81 || message || signatures`
 ```
 
-### Error Handling
-
-The crate provides detailed error context:
+### v0 transaction with lookup tables
 
 ```rust
-use solana_primitives::{Pubkey, Result, SolanaError};
+use solana_primitives::AddressLookupTableAccount;
 
-fn example() -> Result<()> {
-    // This will provide a detailed error message
-    let invalid_pubkey = Pubkey::from_base58("invalid")?;
-    Ok(())
+// Parse lookup tables fetched with `getAccountInfo`...
+let table = AddressLookupTableAccount::from_account_data(table_key, &account_data)?;
+// ...or construct them directly.
+let tables = vec![AddressLookupTableAccount::new(table_key, vec![looked_up])];
+
+let mut transaction = builder.build_v0(&tables)?;
+transaction.sign(&[&private_key])?;
+```
+
+Signers, invoked programs, and a durable nonce account always stay in the static keys.
+
+### Parsing and inspecting transactions
+
+```rust
+use solana_primitives::{TransactionVersion, VersionedTransaction};
+
+let transaction = VersionedTransaction::deserialize(&wire_bytes)?;
+match transaction.version() {
+    TransactionVersion::V1 => println!("fee: {:?} lamports", transaction.priority_fee_lamports()),
+    _ => println!("price: {:?} micro-lamports/CU", transaction.get_compute_unit_price()),
 }
-
-// Error message: "Invalid public key: failed to decode base58: invalid"
+println!("CU limit: {:?}", transaction.get_compute_unit_limit());
+transaction.verify()?;
 ```
 
-## Available Program Helpers
+Compute budget getters report what the runtime would apply: they return `None` when the Compute Budget instructions would fail the transaction (an unparsable or repeated request, an invalid heap size, or a zero loaded accounts data size limit). Setters clear signatures when they change the message.
 
-The crate includes pre-built instruction constructors for common Solana programs:
+`deserialize` rejects truncated input, trailing bytes, non-canonical lengths, unknown versions and config bits, oversized transactions (1232 bytes for legacy/v0, 4096 for v1), and anything that fails `sanitize()`.
 
-- **System Program**: `transfer`, `create_account`, `allocate`, etc.
-- **Token Program**: `transfer`, `transfer_checked`, `mint_to`, `burn`, etc.
-- **Associated Token Program**: `create_associated_token_account`
-- **Compute Budget Program**: `set_compute_unit_limit`, `set_compute_unit_price`
-
-Program ID helpers are available for easy access:
+### Program Derived Addresses
 
 ```rust
-use solana_primitives::instructions::program_ids::{
-    system_program, token_program, token_2022_program,
-    associated_token_program, compute_budget_program
-};
+use solana_primitives::{Pubkey, find_program_address};
+
+let program_id = Pubkey::from_base58("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")?;
+let (pda, bump) = find_program_address(&program_id, &[b"vault", owner.as_bytes()])?;
 ```
+
+### Error handling
+
+Errors are a typed `SolanaError` with `Compile`, `Decode`, `Encode`, and `Sanitize` sub-errors:
+
+```rust
+use solana_primitives::{DecodeError, SolanaError, VersionedTransaction};
+
+match VersionedTransaction::deserialize(&bytes) {
+    Err(SolanaError::Decode(DecodeError::TrailingBytes)) => { /* ... */ }
+    Err(SolanaError::Sanitize(err)) => eprintln!("invalid transaction: {err}"),
+    Err(err) => eprintln!("{err}"),
+    Ok(transaction) => { /* ... */ }
+}
+```
+
+## Program Helpers
+
+- **System** (`instructions::system`): `create_account`, `create_account_with_seed`, `assign`, `assign_with_seed`, `transfer`, `transfer_with_seed`, `allocate`, `allocate_with_seed`, `create_nonce_account`, `create_nonce_account_with_seed`, `initialize_nonce_account`, `advance_nonce_account`, `withdraw_nonce_account`, `authorize_nonce_account`, `upgrade_nonce_account`
+- **SPL Token** (`instructions::token`, each with a `*_with_program_id` variant for Token-2022): `initialize_mint`, `initialize_account`, `transfer`, `transfer_checked`, `mint_to`, `mint_to_checked`, `burn`, `burn_checked`, `close_account`, `sync_native`
+- **Associated Token Account** (`instructions::associated_token`): `create_associated_token_account`, `create_associated_token_account_idempotent`, `get_associated_token_address`
+- **Compute Budget** (`instructions::compute_budget`, legacy/v0): `set_compute_unit_limit`, `set_compute_unit_price`, `request_heap_frame`, `set_loaded_accounts_data_size_limit`, `ensure_compute_unit_price`
+- **Memo** (`instructions::memo`): `memo`
+- **Anchor** (`instructions::anchor`): `global_discriminator`, `account_discriminator`, `event_discriminator`
+
+Program and sysvar addresses are constants in `instructions::program_ids` (for example `SYSTEM_PROGRAM`, `TOKEN_PROGRAM`, `COMPUTE_BUDGET_PROGRAM`), with matching base58 `*_ID` strings and helper functions.
 
 ## Examples
 
-See `solana-primitives/examples/` for complete working examples:
+See `solana-primitives/examples/`:
 
-- `basic` - Basic transaction construction
-- `decode_tx` - Transaction deserialization
+- `basic` - build, sign, and serialize a legacy transaction
+- `decode_tx` - decode and inspect a mainnet transaction
 
-Run examples with:
 ```bash
 cargo run --example basic
 cargo run --example decode_tx

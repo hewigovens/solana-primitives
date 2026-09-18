@@ -1,53 +1,26 @@
-use crate::types::{CompiledInstruction, MessageAddressTableLookup, Pubkey};
-use borsh::{BorshDeserialize, BorshSerialize};
+use crate::compiler::{CompiledKeys, compile_instructions};
+use crate::error::{Result, SanitizeError};
+use crate::types::v1::{MessageV1, TransactionConfig};
+use crate::types::{
+    AddressLookupTableAccount, CompiledInstruction, Instruction, MessageAddressTableLookup, Pubkey,
+};
+use crate::wire;
 
-use serde::{Deserialize, Serialize};
-
-/// Serialize the common message body (header + account keys + blockhash + instructions).
-/// Shared by Legacy, Message, and V0 message types.
-fn serialize_message_body(
-    header: &MessageHeader,
-    account_keys: &[Pubkey],
-    recent_blockhash: &[u8; 32],
-    instructions: &[CompiledInstruction],
-) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-
-    // 1. Header (3 bytes)
-    bytes.push(header.num_required_signatures);
-    bytes.push(header.num_readonly_signed_accounts);
-    bytes.push(header.num_readonly_unsigned_accounts);
-
-    // 2. Account keys
-    let len = crate::encode_length_to_compact_u16_bytes(account_keys.len())?;
-    bytes.extend_from_slice(&len);
-    for pubkey in account_keys {
-        bytes.extend_from_slice(pubkey.as_bytes());
-    }
-
-    // 3. Recent blockhash (32 bytes)
-    bytes.extend_from_slice(recent_blockhash);
-
-    // 4. Instructions
-    let len = crate::encode_length_to_compact_u16_bytes(instructions.len())?;
-    bytes.extend_from_slice(&len);
-    for ix in instructions {
-        bytes.push(ix.program_id_index);
-
-        let len = crate::encode_length_to_compact_u16_bytes(ix.accounts.len())?;
-        bytes.extend_from_slice(&len);
-        bytes.extend_from_slice(&ix.accounts);
-
-        let len = crate::encode_length_to_compact_u16_bytes(ix.data.len())?;
-        bytes.extend_from_slice(&len);
-        bytes.extend_from_slice(&ix.data);
-    }
-
-    Ok(bytes)
+/// Decode a base58 blockhash (as returned by `getLatestBlockhash`) or durable nonce value.
+pub fn decode_blockhash(blockhash: &str) -> Result<[u8; 32]> {
+    // Blockhashes are 32 base58 bytes, like a pubkey.
+    Pubkey::from_base58(blockhash).map(Pubkey::to_bytes)
 }
 
+/// Account indexes are `u8`, so a message can reference at most 256 accounts.
+const MAX_ACCOUNT_KEYS: usize = 256;
+
 /// The message header, identifying signed and read-only `account_keys`.
-#[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+///
+/// Account keys are ordered writable signers (fee payer first), readonly
+/// signers, writable non-signers, then readonly non-signers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MessageHeader {
     /// The number of signatures required for this message to be considered valid.
     pub num_required_signatures: u8,
@@ -57,98 +30,54 @@ pub struct MessageHeader {
     pub num_readonly_unsigned_accounts: u8,
 }
 
-/// Legacy message format (pre-versioned transactions)
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
-pub struct LegacyMessage {
-    /// The message header, identifying signed and read-only `account_keys`.
-    pub header: MessageHeader,
-    /// List of account public keys
-    pub account_keys: Vec<Pubkey>,
-    /// The blockhash of a recent block.
-    pub recent_blockhash: [u8; 32],
-    /// Instructions that will be executed in sequence and committed in one atomic transaction if all succeed.
-    pub instructions: Vec<CompiledInstruction>,
-}
-
-impl LegacyMessage {
-    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        serialize_message_body(
-            &self.header,
-            &self.account_keys,
-            &self.recent_blockhash,
-            &self.instructions,
-        )
-    }
-}
-
-/// Versioned message format V0
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
-pub struct VersionedMessageV0 {
-    /// The message header, identifying signed and read-only `account_keys`.
-    pub header: MessageHeader,
-    /// List of account public keys
-    pub account_keys: Vec<Pubkey>,
-    /// The blockhash of a recent block.
-    pub recent_blockhash: [u8; 32],
-    /// Instructions that will be executed in sequence and committed in one atomic transaction if all succeed.
-    pub instructions: Vec<CompiledInstruction>,
-    /// List of address lookup table references
-    pub address_table_lookups: Vec<MessageAddressTableLookup>,
-}
-
-impl VersionedMessageV0 {
-    /// Serialize the V0 message to wire bytes for signing.
-    ///
-    /// Format: `[0x80]` version prefix + header + account keys + blockhash + instructions + address table lookups
-    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        let mut bytes = Vec::new();
-
-        // V0 version prefix
-        bytes.push(0x80);
-
-        // Message body (same as legacy)
-        let body = serialize_message_body(
-            &self.header,
-            &self.account_keys,
-            &self.recent_blockhash,
-            &self.instructions,
-        )?;
-        bytes.extend_from_slice(&body);
-
-        // Address table lookups
-        let lookup_len =
-            crate::encode_length_to_compact_u16_bytes(self.address_table_lookups.len())?;
-        bytes.extend_from_slice(&lookup_len);
-
-        for lookup in &self.address_table_lookups {
-            bytes.extend_from_slice(lookup.account_key.as_bytes());
-
-            let writable_len =
-                crate::encode_length_to_compact_u16_bytes(lookup.writable_indexes.len())?;
-            bytes.extend_from_slice(&writable_len);
-            bytes.extend_from_slice(&lookup.writable_indexes);
-
-            let readonly_len =
-                crate::encode_length_to_compact_u16_bytes(lookup.readonly_indexes.len())?;
-            bytes.extend_from_slice(&readonly_len);
-            bytes.extend_from_slice(&lookup.readonly_indexes);
+impl MessageHeader {
+    /// Rules shared by every message version.
+    pub(crate) fn sanitize(
+        &self,
+        num_account_keys: usize,
+    ) -> std::result::Result<(), SanitizeError> {
+        if usize::from(self.num_required_signatures)
+            + usize::from(self.num_readonly_unsigned_accounts)
+            > num_account_keys
+        {
+            return Err(SanitizeError::NotEnoughAccountKeys);
         }
-
-        Ok(bytes)
+        if self.num_readonly_signed_accounts >= self.num_required_signatures {
+            return Err(SanitizeError::NoWritableFeePayer);
+        }
+        Ok(())
     }
 }
 
-/// Versioned message format
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
-pub enum VersionedMessage {
-    /// Legacy message format (pre-versioned transactions)
-    Legacy(LegacyMessage),
-    /// Versioned message format V0
-    V0(VersionedMessageV0),
+/// Check instruction indexes: programs must be static non-payer keys, and
+/// accounts must be below `num_account_keys`.
+pub(crate) fn sanitize_instructions(
+    instructions: &[CompiledInstruction],
+    num_static_keys: usize,
+    num_account_keys: usize,
+) -> std::result::Result<(), SanitizeError> {
+    for instruction in instructions {
+        let program_index = usize::from(instruction.program_id_index);
+        if program_index == 0 || program_index >= num_static_keys {
+            return Err(SanitizeError::InvalidProgramIndex);
+        }
+        if instruction
+            .accounts
+            .iter()
+            .any(|&index| usize::from(index) >= num_account_keys)
+        {
+            return Err(SanitizeError::InvalidAccountIndex);
+        }
+    }
+    Ok(())
 }
 
-/// A Solana transaction message
-#[derive(Debug, Clone, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+/// A legacy transaction message.
+///
+/// Its wire encoding is `header || compact-u16 keys || blockhash || compact-u16 instructions`,
+/// which is also the byte string that signers sign.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Message {
     /// The message header, identifying signed and read-only `account_keys`.
     pub header: MessageHeader,
@@ -160,8 +89,11 @@ pub struct Message {
     pub instructions: Vec<CompiledInstruction>,
 }
 
+/// The legacy message; kept as an alias of [`Message`].
+pub type LegacyMessage = Message;
+
 impl Message {
-    /// Create a new message
+    /// Assemble a message from already-compiled parts.
     pub fn new(
         header: MessageHeader,
         account_keys: Vec<Pubkey>,
@@ -176,108 +108,478 @@ impl Message {
         }
     }
 
-    /// Get the number of required signatures
+    /// Compile `instructions` with `payer` as the fee payer.
+    ///
+    /// Keys are ordered like the Solana SDK's `Message::new`.
+    pub fn try_compile(
+        payer: &Pubkey,
+        instructions: &[Instruction],
+        recent_blockhash: [u8; 32],
+    ) -> Result<Self> {
+        let (header, account_keys) =
+            CompiledKeys::compile(payer, instructions).into_message_components()?;
+        let instructions = compile_instructions(instructions, &account_keys, &[])?;
+        Ok(Self {
+            header,
+            account_keys,
+            recent_blockhash,
+            instructions,
+        })
+    }
+
+    /// How many leading account keys must sign.
     pub fn num_required_signatures(&self) -> u8 {
         self.header.num_required_signatures
     }
 
-    /// Get the number of read-only signed accounts
+    /// How many of the signing keys are read-only.
     pub fn num_readonly_signed_accounts(&self) -> u8 {
         self.header.num_readonly_signed_accounts
     }
 
-    /// Get the number of read-only unsigned accounts
+    /// How many of the non-signing keys are read-only.
     pub fn num_readonly_unsigned_accounts(&self) -> u8 {
         self.header.num_readonly_unsigned_accounts
     }
 
-    /// Serializes the message into the byte format required for signing
-    /// and for the legacy transaction wire format.
-    pub fn serialize_for_signing(&self) -> Result<Vec<u8>, String> {
-        serialize_message_body(
-            &self.header,
-            &self.account_keys,
-            &self.recent_blockhash,
-            &self.instructions,
-        )
+    /// The fee payer (first account key).
+    pub fn fee_payer(&self) -> Option<&Pubkey> {
+        self.account_keys.first()
+    }
+
+    /// Serialize to wire bytes. These are the bytes that get signed.
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        wire::write_legacy_message(&mut out, self)?;
+        Ok(out)
+    }
+
+    /// Serialize to the bytes that get signed; same as [`Message::serialize`].
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>> {
+        self.serialize()
+    }
+
+    /// Check Solana's legacy message sanitization rules.
+    pub fn sanitize(&self) -> Result<()> {
+        let num_keys = self.account_keys.len();
+        self.header.sanitize(num_keys)?;
+        sanitize_instructions(&self.instructions, num_keys, num_keys)?;
+        Ok(())
+    }
+}
+
+/// A v0 message, which can load accounts from address lookup tables.
+///
+/// Its wire encoding is `0x80 || legacy body || compact-u16 lookups`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MessageV0 {
+    /// The message header, identifying signed and read-only `account_keys`.
+    pub header: MessageHeader,
+    /// Static account keys; looked-up keys follow them in index space.
+    pub account_keys: Vec<Pubkey>,
+    /// The blockhash of a recent block.
+    pub recent_blockhash: [u8; 32],
+    /// Instructions that will be executed in sequence and committed in one atomic transaction if all succeed.
+    pub instructions: Vec<CompiledInstruction>,
+    /// List of address lookup table references
+    pub address_table_lookups: Vec<MessageAddressTableLookup>,
+}
+
+/// The v0 message; kept as an alias of [`MessageV0`].
+pub type VersionedMessageV0 = MessageV0;
+
+impl MessageV0 {
+    /// Compile `instructions` with `payer` as the fee payer, loading eligible
+    /// accounts from `address_lookup_tables`.
+    ///
+    /// Tables are tried in order and each account is loaded from the first table
+    /// (and first index) that has it. Signers, invoked programs, and the durable
+    /// nonce account always stay static. Matches the Solana SDK's `v0::Message::try_compile`.
+    pub fn try_compile(
+        payer: &Pubkey,
+        instructions: &[Instruction],
+        address_lookup_tables: &[AddressLookupTableAccount],
+        recent_blockhash: [u8; 32],
+    ) -> Result<Self> {
+        let mut keys = CompiledKeys::compile(payer, instructions);
+        let mut address_table_lookups = Vec::new();
+        let mut loaded = Vec::new();
+        for table in address_lookup_tables {
+            if let Some((lookup, addresses)) = keys.extract_table_lookup(table)? {
+                address_table_lookups.push(lookup);
+                loaded.push(addresses);
+            }
+        }
+        let (header, account_keys) = keys.into_message_components()?;
+        let instructions = compile_instructions(instructions, &account_keys, &loaded)?;
+        Ok(Self {
+            header,
+            account_keys,
+            recent_blockhash,
+            instructions,
+            address_table_lookups,
+        })
+    }
+
+    /// Serialize to wire bytes, including the `0x80` version prefix. These are the bytes that get signed.
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        wire::write_v0_message(&mut out, self)?;
+        Ok(out)
+    }
+
+    /// Serialize to the bytes that get signed; same as [`MessageV0::serialize`].
+    pub fn serialize_for_signing(&self) -> Result<Vec<u8>> {
+        self.serialize()
+    }
+
+    /// Check Solana's v0 message sanitization rules.
+    pub fn sanitize(&self) -> Result<()> {
+        let num_static_keys = self.account_keys.len();
+        self.header.sanitize(num_static_keys)?;
+
+        let mut num_lookup_keys = 0;
+        for lookup in &self.address_table_lookups {
+            let num_indexes = lookup.writable_indexes.len() + lookup.readonly_indexes.len();
+            if num_indexes == 0 {
+                return Err(SanitizeError::EmptyAddressTableLookup.into());
+            }
+            num_lookup_keys += num_indexes;
+        }
+        let num_keys = num_static_keys + num_lookup_keys;
+        if num_keys > MAX_ACCOUNT_KEYS {
+            return Err(SanitizeError::TooManyAccountKeys.into());
+        }
+
+        // Programs cannot be loaded from lookup tables.
+        sanitize_instructions(&self.instructions, num_static_keys, num_keys)?;
+        Ok(())
+    }
+}
+
+/// A message of any supported version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum VersionedMessage {
+    /// Legacy message (no version prefix).
+    Legacy(Message),
+    /// Version 0 message.
+    V0(MessageV0),
+    /// Version 1 message.
+    V1(MessageV1),
+}
+
+impl Default for VersionedMessage {
+    fn default() -> Self {
+        Self::Legacy(Message::default())
+    }
+}
+
+impl From<Message> for VersionedMessage {
+    fn from(message: Message) -> Self {
+        Self::Legacy(message)
+    }
+}
+
+impl From<MessageV0> for VersionedMessage {
+    fn from(message: MessageV0) -> Self {
+        Self::V0(message)
+    }
+}
+
+impl From<MessageV1> for VersionedMessage {
+    fn from(message: MessageV1) -> Self {
+        Self::V1(message)
+    }
+}
+
+impl VersionedMessage {
+    /// The message header.
+    pub fn header(&self) -> &MessageHeader {
+        match self {
+            Self::Legacy(message) => &message.header,
+            Self::V0(message) => &message.header,
+            Self::V1(message) => &message.header,
+        }
+    }
+
+    /// Account keys stored in the message itself (excludes looked-up keys).
+    pub fn static_account_keys(&self) -> &[Pubkey] {
+        match self {
+            Self::Legacy(message) => &message.account_keys,
+            Self::V0(message) => &message.account_keys,
+            Self::V1(message) => &message.account_keys,
+        }
+    }
+
+    /// The recent blockhash (or durable nonce) that bounds the message lifetime;
+    /// the lifetime specifier of a v1 message.
+    pub fn recent_blockhash(&self) -> &[u8; 32] {
+        match self {
+            Self::Legacy(message) => &message.recent_blockhash,
+            Self::V0(message) => &message.recent_blockhash,
+            Self::V1(message) => &message.lifetime_specifier,
+        }
+    }
+
+    /// Replace the recent blockhash. Signatures over the old message become invalid;
+    /// [`VersionedTransaction::set_recent_blockhash`](crate::VersionedTransaction::set_recent_blockhash)
+    /// also clears them.
+    pub fn set_recent_blockhash(&mut self, recent_blockhash: [u8; 32]) {
+        match self {
+            Self::Legacy(message) => message.recent_blockhash = recent_blockhash,
+            Self::V0(message) => message.recent_blockhash = recent_blockhash,
+            Self::V1(message) => message.lifetime_specifier = recent_blockhash,
+        }
+    }
+
+    /// Compiled instructions.
+    pub fn instructions(&self) -> &[CompiledInstruction] {
+        match self {
+            Self::Legacy(message) => &message.instructions,
+            Self::V0(message) => &message.instructions,
+            Self::V1(message) => &message.instructions,
+        }
+    }
+
+    pub(crate) fn instructions_mut(&mut self) -> &mut [CompiledInstruction] {
+        match self {
+            Self::Legacy(message) => &mut message.instructions,
+            Self::V0(message) => &mut message.instructions,
+            Self::V1(message) => &mut message.instructions,
+        }
+    }
+
+    /// The v1 transaction config; `None` for earlier versions.
+    pub fn transaction_config(&self) -> Option<&TransactionConfig> {
+        match self {
+            Self::V1(message) => Some(&message.config),
+            _ => None,
+        }
+    }
+
+    /// Address table lookups; `None` for versions without lookup tables.
+    pub fn address_table_lookups(&self) -> Option<&[MessageAddressTableLookup]> {
+        match self {
+            Self::V0(message) => Some(&message.address_table_lookups),
+            Self::Legacy(_) | Self::V1(_) => None,
+        }
+    }
+
+    /// The fee payer (first account key).
+    pub fn fee_payer(&self) -> Option<&Pubkey> {
+        self.static_account_keys().first()
+    }
+
+    /// Serialize to wire bytes. These are the bytes that get signed.
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        wire::write_message(&mut out, self)?;
+        Ok(out)
+    }
+
+    /// Decode exactly one message and check sanitization rules.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self> {
+        let message = wire::decode_message(bytes)?;
+        message.sanitize()?;
+        Ok(message)
+    }
+
+    /// Check Solana's sanitization rules for this message version.
+    pub fn sanitize(&self) -> Result<()> {
+        match self {
+            Self::Legacy(message) => message.sanitize(),
+            Self::V0(message) => message.sanitize(),
+            Self::V1(message) => message.sanitize(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{CompiledInstruction, Pubkey};
+    use crate::error::{DecodeError, SolanaError};
 
-    #[test]
-    fn test_message() {
-        let header = MessageHeader {
-            num_required_signatures: 1,
-            num_readonly_signed_accounts: 0,
-            num_readonly_unsigned_accounts: 1,
-        };
-        let account_keys = vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])];
-        let recent_blockhash = [0u8; 32];
-        let instructions = vec![CompiledInstruction {
-            program_id_index: 1,
-            accounts: vec![0],
+    fn header(
+        num_required_signatures: u8,
+        readonly_signed: u8,
+        readonly_unsigned: u8,
+    ) -> MessageHeader {
+        MessageHeader {
+            num_required_signatures,
+            num_readonly_signed_accounts: readonly_signed,
+            num_readonly_unsigned_accounts: readonly_unsigned,
+        }
+    }
+
+    fn instruction(program_id_index: u8, accounts: &[u8]) -> CompiledInstruction {
+        CompiledInstruction {
+            program_id_index,
+            accounts: accounts.to_vec(),
             data: vec![],
-        }];
+        }
+    }
 
-        let message = Message::new(header, account_keys, recent_blockhash, instructions);
+    fn legacy(
+        header: MessageHeader,
+        num_keys: u8,
+        instructions: Vec<CompiledInstruction>,
+    ) -> Message {
+        Message::new(
+            header,
+            (0..num_keys).map(|i| Pubkey::new([i; 32])).collect(),
+            [0; 32],
+            instructions,
+        )
+    }
 
-        assert_eq!(message.num_required_signatures(), 1);
-        assert_eq!(message.num_readonly_signed_accounts(), 0);
-        assert_eq!(message.num_readonly_unsigned_accounts(), 1);
+    fn sanitize_err(message: impl Into<VersionedMessage>) -> SanitizeError {
+        match message.into().sanitize() {
+            Err(SolanaError::Sanitize(err)) => err,
+            other => panic!("expected a sanitize error, got {other:?}"),
+        }
     }
 
     #[test]
-    fn test_versioned_message() {
-        let header = MessageHeader {
-            num_required_signatures: 1,
-            num_readonly_signed_accounts: 0,
-            num_readonly_unsigned_accounts: 1,
-        };
-        let account_keys = vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])];
-        let recent_blockhash = [0u8; 32];
-        let instructions = vec![CompiledInstruction {
-            program_id_index: 1,
-            accounts: vec![0],
-            data: vec![],
-        }];
-
-        // Create a V0 message with address table lookups
-        let address_table_lookups = vec![MessageAddressTableLookup::new(
-            Pubkey::new([2; 32]),
-            vec![0, 1], // writable indexes
-            vec![2],    // readonly indexes
-        )];
-
-        let v0_message = VersionedMessageV0 {
-            header: header.clone(),
-            account_keys: account_keys.clone(),
-            recent_blockhash,
-            instructions: instructions.clone(),
-            address_table_lookups,
-        };
-
-        // Create a versioned message
-        let versioned_message = VersionedMessage::V0(v0_message);
-
-        // Verify the contents
-        match versioned_message {
-            VersionedMessage::Legacy(_) => panic!("Expected V0 message"),
-            VersionedMessage::V0(msg) => {
-                assert_eq!(msg.header.num_required_signatures, 1);
-                assert_eq!(msg.account_keys.len(), 2);
-                assert_eq!(msg.instructions.len(), 1);
-                assert_eq!(msg.address_table_lookups.len(), 1);
-                assert_eq!(
-                    msg.address_table_lookups[0].account_key,
-                    Pubkey::new([2; 32])
-                );
-                assert_eq!(msg.address_table_lookups[0].writable_indexes, vec![0, 1]);
-                assert_eq!(msg.address_table_lookups[0].readonly_indexes, vec![2]);
-            }
+    fn legacy_sanitize_rules() {
+        assert_eq!(
+            legacy(header(1, 0, 1), 2, vec![instruction(1, &[0])]).sanitize(),
+            Ok(())
+        );
+        let cases = [
+            (
+                header(1, 0, 5),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NotEnoughAccountKeys,
+            ),
+            (
+                header(1, 0, 2),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NotEnoughAccountKeys,
+            ),
+            (
+                header(1, 1, 1),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NoWritableFeePayer,
+            ),
+            (
+                header(0, 0, 1),
+                2,
+                instruction(1, &[0]),
+                SanitizeError::NoWritableFeePayer,
+            ),
+            (
+                header(1, 0, 1),
+                2,
+                instruction(0, &[0]),
+                SanitizeError::InvalidProgramIndex,
+            ),
+            (
+                header(1, 0, 1),
+                2,
+                instruction(2, &[0]),
+                SanitizeError::InvalidProgramIndex,
+            ),
+            (
+                header(1, 0, 1),
+                2,
+                instruction(1, &[2]),
+                SanitizeError::InvalidAccountIndex,
+            ),
+        ];
+        for (header, num_keys, instruction, expected) in cases {
+            assert_eq!(
+                sanitize_err(legacy(header, num_keys, vec![instruction])),
+                expected
+            );
         }
+    }
+
+    #[test]
+    fn v0_sanitize_rules() {
+        let lookup = |writable: &[u8], readonly: &[u8]| MessageAddressTableLookup {
+            account_key: Pubkey::new([9; 32]),
+            writable_indexes: writable.to_vec(),
+            readonly_indexes: readonly.to_vec(),
+        };
+        let v0 = |instructions: Vec<CompiledInstruction>, lookups| MessageV0 {
+            header: header(1, 0, 1),
+            account_keys: vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])],
+            recent_blockhash: [0; 32],
+            instructions,
+            address_table_lookups: lookups,
+        };
+
+        // Index 2 is the looked-up key.
+        assert_eq!(
+            v0(vec![instruction(1, &[0, 2])], vec![lookup(&[0], &[])]).sanitize(),
+            Ok(())
+        );
+        assert_eq!(
+            sanitize_err(v0(vec![instruction(2, &[0])], vec![lookup(&[0], &[])])),
+            SanitizeError::InvalidProgramIndex
+        );
+        assert_eq!(
+            sanitize_err(v0(vec![instruction(1, &[3])], vec![lookup(&[0], &[])])),
+            SanitizeError::InvalidAccountIndex
+        );
+        assert_eq!(
+            sanitize_err(v0(vec![], vec![lookup(&[], &[])])),
+            SanitizeError::EmptyAddressTableLookup
+        );
+        let indexes: Vec<u8> = (0..=254).collect();
+        assert_eq!(
+            sanitize_err(v0(vec![], vec![lookup(&indexes, &[])])),
+            SanitizeError::TooManyAccountKeys
+        );
+        assert_eq!(
+            v0(vec![], vec![lookup(&indexes[1..], &[])]).sanitize(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn decode_blockhash_rules() {
+        assert_eq!(
+            decode_blockhash("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd"),
+            Ok(Pubkey::from_str_const("9U2ogLjDt479wubHbEtPLGBF84DijmWggA4KoXSwcivd").to_bytes())
+        );
+        assert_eq!(decode_blockhash("0"), Err(SolanaError::InvalidBase58));
+        assert_eq!(
+            decode_blockhash("2g"),
+            Err(SolanaError::InvalidLength {
+                expected: 32,
+                actual: 1
+            })
+        );
+    }
+
+    #[test]
+    fn versioned_message_roundtrip() {
+        let message =
+            VersionedMessage::Legacy(legacy(header(1, 0, 1), 2, vec![instruction(1, &[0])]));
+        let bytes = message.serialize().unwrap();
+        assert_eq!(VersionedMessage::deserialize(&bytes), Ok(message));
+
+        let v0 = VersionedMessage::V0(MessageV0 {
+            header: header(1, 0, 1),
+            account_keys: vec![Pubkey::new([0; 32]), Pubkey::new([1; 32])],
+            instructions: vec![instruction(1, &[0])],
+            ..MessageV0::default()
+        });
+        let bytes = v0.serialize().unwrap();
+        assert_eq!(bytes[0], 0x80);
+        assert_eq!(VersionedMessage::deserialize(&bytes), Ok(v0));
+
+        let mut unsupported = bytes.clone();
+        unsupported[0] = 0x82;
+        assert_eq!(
+            VersionedMessage::deserialize(&unsupported),
+            Err(DecodeError::UnsupportedMessageVersion(2).into())
+        );
     }
 }

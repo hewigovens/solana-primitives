@@ -11,11 +11,39 @@ env:
 
 jobs:
   build:
+    name: Build and test (${{ matrix.features.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - name: default
+            flags: ""
+          - name: no-default
+            flags: "--no-default-features"
+          - name: serde
+            flags: "--features serde"
+          - name: borsh
+            flags: "--features borsh"
+          - name: all
+            flags: "--all-features"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run tests
+        run: cargo test --all-targets ${{ matrix.features.flags }}
+      - name: Run doctests
+        run: cargo test --doc ${{ matrix.features.flags }}
+
+  msrv:
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build
-        run: cargo build --all-features
-      - name: Run tests
-        run: cargo test --all-features
+      - name: Install Rust 1.88
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Check
+        run: |
+          cargo +1.88.0 check --all-features
+          cargo +1.88.0 check --no-default-features
